@@ -12,7 +12,7 @@
  * compiles without depending on the playwright type package at build time.
  */
 
-import { existsSync, openSync, readSync, closeSync, statSync, writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, openSync, readSync, closeSync, statSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ErrorCode, NavigateParams, NavigateResult, ClickParams, ClickResult, TypeParams, TypeResult, EvaluateParams, EvaluateResult, ScreenshotParams, ScreenshotResult, StatusResult, SnapshotParams, SnapshotNode, SnapshotResult, NavigationResult, ScrollParams, ScrollResult, PressParams, PressResult, WaitParams, WaitResult, HoverParams, HoverResult, CookiesParams, CookiesResult, ConsoleMessagesParams, ConsoleMessagesResult, NetworkRequestsParams, NetworkRequestsResult, PdfParams, PdfResult, I18nTemplate, BrowserUseConfig } from './types.js'
@@ -301,12 +301,14 @@ function isRealBrowserBinary(p: string): boolean {
     // Reject shell-script wrappers (snap stubs start with `#!`).
     if (n >= 2 && buf[0] === 0x23 && buf[1] === 0x21) return false
     // ELF magic (Linux). Mach-O magic (macOS): FEEDFACE / CFFAEDFE.
+    // PE magic (Windows): "MZ" (4D 5A).
     if (n >= 4) {
       if (buf[0] === 0x7f && buf[1] === 0x45 && buf[2] === 0x4c && buf[3] === 0x46) return true
       if (
         (buf[0] === 0xfe && buf[1] === 0xed && buf[2] === 0xfa && buf[3] === 0xce) ||
         (buf[0] === 0xcf && buf[1] === 0xfa && buf[2] === 0xed && buf[3] === 0xfe)
       ) return true
+      if (buf[0] === 0x4d && buf[1] === 0x5a) return true
     }
   } catch {
     return false
@@ -421,12 +423,25 @@ export class BrowserSession {
   private resolveExecutablePath(): string | undefined {
     const env = process.env.DSH_TUI_BROWSER_EXECUTABLE
     if (env) return env
+    // Platform-aware candidates: system Chromium/Chrome on Linux/macOS/Windows.
     const candidates = [
       '/usr/bin/chromium',
       '/usr/bin/chromium-browser',
-      '/opt/chromium-1148/chrome-linux/chrome',
-      '/opt/chromium/chrome-linux/chrome',
+      '/usr/bin/google-chrome',
+      '/usr/bin/google-chrome-stable',
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
     ]
+    // Scan /opt for a bundled Chromium (constrained containers commonly drop a
+    // tarball under /opt/chromium-*/chrome-linux/chrome). Avoid hard-coding a
+    // specific build number — glob the dir name instead.
+    try {
+      for (const entry of readdirSync('/opt')) {
+        const nested = join('/opt', entry, 'chrome-linux', 'chrome')
+        if (existsSync(nested) && isRealBrowserBinary(nested)) return nested
+      }
+    } catch { /* no /opt */ }
     for (const p of candidates) {
       if (existsSync(p) && isRealBrowserBinary(p)) return p
     }
