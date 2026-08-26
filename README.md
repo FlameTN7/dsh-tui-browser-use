@@ -41,11 +41,15 @@
 | `browser_navigate` | 导航到 URL | 基础 |
 | `browser_screenshot` | 截图 + 视觉分析 | 走视觉管线（file_api / base64 / tiling 自动） |
 | `browser_click` | 点击元素 | 基础 |
-| `browser_type` | 输入文本 | 基础 |
+| `browser_type` | 输入文本 | 基础；可选 `clear` 先清空 + `enter` 后按回车 |
 | `browser_evaluate` | 执行 JS | 基础 |
-| `browser_extract` | 结构化提取 | 视觉读取 + schema 校验（`schema-validation-failed` 上报） |
+| `browser_extract` | 结构化提取 | 视觉读取 + schema 校验（`schema-validation-failed` 上报，失败重试 ≤2 次） |
 | `browser_task` | 自然语言多步任务 | 视觉驱动的 navigate/click/type 循环，带逐步成本 |
 | `browser_snapshot` | 可访问性快照 | 返回可交互/语义元素索引（role/name/bbox），作为默认观察，视觉降为兜底 |
+| `browser_back` / `browser_forward` / `browser_reload` | 前进/后退/刷新 | 返回标题+URL+状态码 |
+| `browser_scroll` | 滚动 | 按像素偏移 `x`/`y`，返回实际滚动位置 |
+| `browser_press` | 按键 | `key` 如 Enter/Escape/Tab/Control+S |
+| `browser_wait` | 等待 | `selector` 可见或 `ms` 睡眠（上限 30000） |
 | `browser_status` | 浏览器状态 | 可用性/版本/配置 |
 
 ## 配置
@@ -148,7 +152,7 @@ Playwright 截图
 npm install            # 安装依赖（postinstall 打印浏览器就绪指引）
 npm run build          # tsc → lib/types/
 npm run check          # CI 门禁：build+smoke+verify:manifest+verify:i18n+router:check
-npm run smoke          # 无头冒烟（入口 + 能力判定 + 截图预处理 + 工具定义，9 工具）
+npm run smoke          # 无头冒烟（入口 + 能力判定 + 截图预处理 + 工具定义，15 工具）
 npm run test:logic     # 纯逻辑测试：extract 重试 + 提示注入护栏（无需浏览器/key）
 npm run test:integration # 真实浏览器集成（需 DSH_TUI_BROWSER_EXECUTABLE）
 npm run verify:manifest # @dsh-std/manifest 校验 dsh-plugin.json

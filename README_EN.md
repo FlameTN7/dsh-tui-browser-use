@@ -43,11 +43,15 @@ A browser-use capability aligned with Claude Code, but natively adapted for the 
 | `browser_navigate` | Navigate to a URL | Basic |
 | `browser_screenshot` | Screenshot + visual analysis | Auto vision pipeline (file_api / base64 / tiling) |
 | `browser_click` | Click an element | Basic |
-| `browser_type` | Type text | Basic |
+| `browser_type` | Type text | Basic; optional `clear` to empty first + `enter` to press a trailing key |
 | `browser_evaluate` | Execute JS | Basic |
-| `browser_extract` | Structured extraction | Vision read + schema validation (reports `schema-validation-failed`) |
+| `browser_extract` | Structured extraction | Vision read + schema validation (reports `schema-validation-failed`, retried ≤2 times) |
 | `browser_task` | Natural-language multi-step task | Vision-driven navigate/click/type loop with per-step cost |
 | `browser_snapshot` | Accessibility snapshot | Returns an indexed list of interactive/semantic elements (role/name/bbox) as the default observation; vision is the fallback |
+| `browser_back` / `browser_forward` / `browser_reload` | Back / forward / reload | Returns title + URL + status |
+| `browser_scroll` | Scroll | Pixel offset `x`/`y`, returns the resulting scroll position |
+| `browser_press` | Press a key | `key` like Enter/Escape/Tab/Control+S |
+| `browser_wait` | Wait | A `selector` becomes visible, or sleep `ms` (capped 30000) |
 | `browser_status` | Browser status | Availability / version / configuration |
 
 ## Configuration
@@ -154,7 +158,7 @@ never as a directive (defends against prompt injection).
 npm install            # install dependencies (postinstall prints browser guidance)
 npm run build          # tsc → lib/types/
 npm run check          # CI gate: build+smoke+verify:manifest+verify:i18n+router:check
-npm run smoke          # headless smoke (entry + capability + preprocess + tool defs, 9 tools)
+npm run smoke          # headless smoke (entry + capability + preprocess + tool defs, 15 tools)
 npm run test:logic     # pure-logic tests: extract retry + prompt-injection fencing (no browser/key)
 npm run test:integration # live browser integration (needs DSH_TUI_BROWSER_EXECUTABLE)
 npm run verify:manifest # @dsh-std/manifest validates dsh-plugin.json

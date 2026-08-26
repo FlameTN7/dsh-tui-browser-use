@@ -13,7 +13,7 @@
  */
 
 import { existsSync, openSync, readSync, closeSync, statSync } from 'node:fs'
-import type { ErrorCode, NavigateParams, NavigateResult, ClickParams, ClickResult, TypeParams, TypeResult, EvaluateParams, EvaluateResult, ScreenshotParams, ScreenshotResult, StatusResult, SnapshotParams, SnapshotNode, SnapshotResult, I18nTemplate, BrowserUseConfig } from './types.js'
+import type { ErrorCode, NavigateParams, NavigateResult, ClickParams, ClickResult, TypeParams, TypeResult, EvaluateParams, EvaluateResult, ScreenshotParams, ScreenshotResult, StatusResult, SnapshotParams, SnapshotNode, SnapshotResult, NavigationResult, ScrollParams, ScrollResult, PressParams, PressResult, WaitParams, WaitResult, I18nTemplate, BrowserUseConfig } from './types.js'
 import { t } from './i18n.js'
 
 // ── Structural Playwright types (no hard dependency) ─────────────────────
@@ -31,9 +31,15 @@ interface PwLocator {
   click(): Promise<void>
   fill(text: string): Promise<void>
   type(text: string): Promise<void>
+  clear(): Promise<void>
   first(): PwLocator
   waitFor(opts?: { state?: 'visible' | 'hidden' | 'attached' | 'detached'; timeout?: number }): Promise<void>
   count(): Promise<number>
+}
+
+/** A Playwright keyboard handle (structural). */
+interface PwKeyboard {
+  press(key: string): Promise<void>
 }
 
 interface PwPage {
@@ -54,6 +60,10 @@ interface PwPage {
   frames(): PwFrame[]
   waitForLoadState(state?: string): Promise<void>
   setViewportSize(size: { width: number; height: number }): Promise<void>
+  goBack(opts?: { waitUntil?: string; timeout?: number }): Promise<{ status(): number | null; url(): string } | null>
+  goForward(opts?: { waitUntil?: string; timeout?: number }): Promise<{ status(): number | null; url(): string } | null>
+  reload(opts?: { waitUntil?: string; timeout?: number }): Promise<{ status(): number | null; url(): string } | null>
+  keyboard: PwKeyboard
 }
 
 /** A child frame, with the same locator query surface as the page. */
@@ -429,8 +439,109 @@ export class BrowserSession {
       // that mounts its form late doesn't miss.
       const locator = await resolveFrameAware(page, params.selector, undefined)
       await waitForLocator(locator)
-      await locator.first().fill(params.text)
+      const field = locator.first()
+      if (params.clear) await field.clear().catch(() => undefined)
+      await field.fill(params.text)
+      // Optional trailing keypress (e.g. `Enter` to submit a form) — requires a
+      // focused page, which Playwright keeps after fill.
+      if (params.enter) {
+        try { await page.keyboard.press(params.enter) } catch { /* key may be unsupported; ignore */ }
+      }
       return { success: true }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
+    }
+  }
+
+  /** Shared post-navigation settle used by back/forward/reload. */
+  private async navSettle(resp: { status(): number | null; url(): string } | null, fallbackUrl: string): Promise<NavigationResult> {
+    const page = this.requirePage()
+    await page.waitForLoadState('load').catch(() => undefined)
+    await page.evaluate('new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))').catch(() => undefined)
+    return { title: await page.title(), url: resp?.url() ?? fallbackUrl, status: resp?.status() ?? null }
+  }
+
+  async back(): Promise<NavigationResult> {
+    if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
+    const page = this.requirePage()
+    try {
+      const before = page.url()
+      const resp = await page.goBack({ waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => null)
+      return await this.navSettle(resp, before)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
+    }
+  }
+
+  async forward(): Promise<NavigationResult> {
+    if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
+    const page = this.requirePage()
+    try {
+      const before = page.url()
+      const resp = await page.goForward({ waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => null)
+      return await this.navSettle(resp, before)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
+    }
+  }
+
+  async reload(): Promise<NavigationResult> {
+    if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
+    const page = this.requirePage()
+    try {
+      const before = page.url()
+      const resp = await page.reload({ waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => null)
+      return await this.navSettle(resp, before)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
+    }
+  }
+
+  async scroll(params: ScrollParams): Promise<ScrollResult> {
+    if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
+    const page = this.requirePage()
+    const x = Math.trunc(Number(params.x) || 0)
+    const y = Math.trunc(Number(params.y) || 0)
+    try {
+      await page.evaluate(`window.scrollBy(${x}, ${y})`)
+      await page.evaluate('new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))').catch(() => undefined)
+      const pos = await page.evaluate<{ x: number; y: number }>('({ x: window.scrollX, y: window.scrollY })').catch(() => ({ x, y }))
+      return { x: Math.trunc(pos?.x ?? x), y: Math.trunc(pos?.y ?? y) }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
+    }
+  }
+
+  async press(params: PressParams): Promise<PressResult> {
+    if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
+    const page = this.requirePage()
+    try {
+      await page.keyboard.press(params.key)
+      return { success: true }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
+    }
+  }
+
+  /** Wait for a selector to become visible, or sleep for `ms`. */
+  async wait(params: WaitParams): Promise<WaitResult> {
+    if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
+    const page = this.requirePage()
+    try {
+      if (params.selector) {
+        const locator = await resolveFrameAware(page, params.selector, undefined)
+        await waitForLocator(locator, params.timeoutMs ?? 6000)
+        return { waited: true, visible: true }
+      }
+      const ms = Math.max(0, Math.min(Number(params.ms) || 0, 30_000))
+      if (ms > 0) await new Promise((r) => setTimeout(r, ms))
+      return { waited: true, ...(ms > 0 ? { ms } : {}) }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))

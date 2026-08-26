@@ -21,6 +21,10 @@ All tools live in the `browser_*` namespace and return a unified envelope
 | `browser_extract` | Extract structured data by a JSON Schema | `schema`, `instruction?` |
 | `browser_task` | Run a multi-step natural-language task | `instruction` |
 | `browser_snapshot` | Index interactive/semantic elements (role/name/bbox) to observe the page without a screenshot | `maxNodes?` |
+| `browser_back` / `browser_forward` / `browser_reload` | Go back / forward / reload | — |
+| `browser_scroll` | Scroll by a pixel delta | `x?` / `y?` |
+| `browser_press` | Press a keyboard key | `key` |
+| `browser_wait` | Wait for a selector visible, or sleep | `selector?` / `ms?` |
 | `browser_status` | Check availability + config | — |
 
 ## Common workflow

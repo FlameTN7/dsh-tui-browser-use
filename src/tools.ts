@@ -18,7 +18,8 @@ import type {
   NavigateParams, ClickParams, TypeParams, EvaluateParams, ScreenshotParams,
   NavigateResult, ClickResult, TypeResult, EvaluateResult, ScreenshotResult, StatusResult,
   ExtractParams, ExtractResult, TaskParams, TaskResult,
-  SnapshotParams, SnapshotResult,
+  SnapshotParams, SnapshotResult, NavigationResult,
+  ScrollParams, ScrollResult, PressParams, PressResult, WaitParams, WaitResult,
   ResultEnvelope, Usage, ErrorCode, BrowserUseConfig, PreparedImage,
 } from './types.js'
 import { t } from './i18n.js'
@@ -257,10 +258,12 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
 
     {
       name: 'browser_type',
-      description: 'Fill an input field with text. Both selector and text are required.',
+      description: 'Fill an input field with text. Both selector and text are required. Optionally clear the field first and/or press a trailing key (e.g. Enter).',
       parameters: objSchema({
         selector: { type: 'string', description: 'CSS selector for the input.' },
         text: { type: 'string', description: 'Text to type into the field.' },
+        enter: { type: 'string', description: 'Optional key to press after filling, e.g. Enter or Tab.' },
+        clear: { type: 'boolean', description: 'Clear the field before filling (default false).' },
       }, ['selector', 'text']),
       output: { schema: envelopeSchema(), render: renderText },
       timeoutMs: 15_000,
@@ -431,6 +434,102 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         const p = (args ?? {}) as SnapshotParams
         try {
           return ok(await session.snapshot(p))
+        } catch (err) { return fail(err) }
+      },
+    },
+
+    {
+      name: 'browser_back',
+      description: 'Navigate the browser back in history. Returns the resulting title/url/status.',
+      parameters: objSchema({}),
+      output: { schema: envelopeSchema(), render: renderText },
+      timeoutMs: 30_000,
+      isConcurrencySafe: () => false,
+      async execute(): Promise<ResultEnvelope<NavigationResult>> {
+        try {
+          return ok(await session.back())
+        } catch (err) { return fail(err) }
+      },
+    },
+
+    {
+      name: 'browser_forward',
+      description: 'Navigate the browser forward in history. Returns the resulting title/url/status.',
+      parameters: objSchema({}),
+      output: { schema: envelopeSchema(), render: renderText },
+      timeoutMs: 30_000,
+      isConcurrencySafe: () => false,
+      async execute(): Promise<ResultEnvelope<NavigationResult>> {
+        try {
+          return ok(await session.forward())
+        } catch (err) { return fail(err) }
+      },
+    },
+
+    {
+      name: 'browser_reload',
+      description: 'Reload the current page. Returns the resulting title/url/status.',
+      parameters: objSchema({}),
+      output: { schema: envelopeSchema(), render: renderText },
+      timeoutMs: 30_000,
+      isConcurrencySafe: () => false,
+      async execute(): Promise<ResultEnvelope<NavigationResult>> {
+        try {
+          return ok(await session.reload())
+        } catch (err) { return fail(err) }
+      },
+    },
+
+    {
+      name: 'browser_scroll',
+      description: 'Scroll the current page by a pixel delta and return the resulting scroll position.',
+      parameters: objSchema({
+        x: { type: 'integer', description: 'Horizontal scroll delta in CSS pixels (default 0).' },
+        y: { type: 'integer', description: 'Vertical scroll delta in CSS pixels (default 0).' },
+      }),
+      output: { schema: envelopeSchema(), render: renderText },
+      timeoutMs: 10_000,
+      isConcurrencySafe: () => true,
+      async execute(args: unknown): Promise<ResultEnvelope<ScrollResult>> {
+        const p = (args ?? {}) as ScrollParams
+        try {
+          return ok(await session.scroll(p))
+        } catch (err) { return fail(err) }
+      },
+    },
+
+    {
+      name: 'browser_press',
+      description: 'Press a keyboard key (e.g. Enter, Escape, Tab, Control+S). Useful for submitting forms or dismissing dialogs.',
+      parameters: objSchema({
+        key: { type: 'string', description: 'Keyboard key, e.g. Enter, Tab, Escape, Control+S.' },
+      }, ['key']),
+      output: { schema: envelopeSchema(), render: renderText },
+      timeoutMs: 10_000,
+      isConcurrencySafe: () => false,
+      async execute(args: unknown): Promise<ResultEnvelope<PressResult>> {
+        const p = (args ?? {}) as PressParams
+        try {
+          return ok(await session.press(p))
+        } catch (err) { return fail(err) }
+      },
+    },
+
+    {
+      name: 'browser_wait',
+      description: 'Wait for a selector to become visible, or sleep for a fixed number of milliseconds (capped 30000). Use this for SPA/lazy content before an interaction.',
+      parameters: objSchema({
+        selector: { type: 'string', description: 'CSS selector to wait for (visible).' },
+        ms: { type: 'integer', description: 'Sleep for ms milliseconds (default 0, capped 30000).' },
+        timeoutMs: { type: 'integer', description: 'Timeout for the selector wait (default 6000).' },
+      }),
+      output: { schema: envelopeSchema(), render: renderText },
+      timeoutMs: 30_000,
+      isConcurrencySafe: () => false,
+      async execute(args: unknown): Promise<ResultEnvelope<WaitResult>> {
+        const p = (args ?? {}) as WaitParams
+        try {
+          return ok(await session.wait(p))
         } catch (err) { return fail(err) }
       },
     },

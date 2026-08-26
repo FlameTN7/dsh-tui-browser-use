@@ -153,11 +153,66 @@ export interface ClickResult {
 export interface TypeParams {
   selector: string
   text: string
+  /** Press the provided key after filling (e.g. `Enter`, `Tab`); default off. */
+  enter?: string
+  /** Clear the field before filling; default off. */
+  clear?: boolean
 }
 
 /** `browser.type` result. */
 export interface TypeResult {
   success: boolean
+}
+
+/** Shared shape for the navigation trio (back/forward/reload). */
+export interface NavigationResult {
+  title: string
+  url: string
+  status: number | null
+}
+
+/** `browser.scroll` parameters. */
+export interface ScrollParams {
+  /** Horizontal scroll delta in CSS pixels (default 0). */
+  x?: number
+  /** Vertical scroll delta in CSS pixels (default 0). */
+  y?: number
+}
+
+/** `browser.scroll` result. */
+export interface ScrollResult {
+  x: number
+  y: number
+}
+
+/** `browser.press` parameters. */
+export interface PressParams {
+  /** Keyboard key, e.g. `Enter`, `Tab`, `Escape`, `Control+S`. */
+  key: string
+}
+
+/** `browser.press` result. */
+export interface PressResult {
+  success: boolean
+}
+
+/** `browser.wait` parameters. */
+export interface WaitParams {
+  /** CSS selector to wait for (visible). Mutually exclusive with `ms`. */
+  selector?: string
+  /** Sleep for `ms` milliseconds (capped 30000). Mutually exclusive with `selector`. */
+  ms?: number
+  /** Timeout in ms for the selector wait (default 6000). */
+  timeoutMs?: number
+}
+
+/** `browser.wait` result. */
+export interface WaitResult {
+  waited: boolean
+  /** Duration actually slept (ms), when `ms` was used. */
+  ms?: number
+  /** Whether the selector became visible (when `selector` was used). */
+  visible?: boolean
 }
 
 /** `browser.evaluate` parameters. */
