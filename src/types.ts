@@ -263,6 +263,26 @@ export interface NetworkRequestsResult {
   requests: string[]
 }
 
+/** `browser.pdf` parameters. */
+export interface PdfParams {
+  /** Output PDF path. When omitted, writes to a temp file and returns its path. */
+  path?: string
+  /** Page format, e.g. `A4` (default) or `Letter`. */
+  format?: string
+  /** Print background graphics (default true). */
+  printBackground?: boolean
+}
+
+/** `browser.pdf` result. */
+export interface PdfResult {
+  /** The page URL that was printed. */
+  url: string
+  /** Absolute path to the saved PDF. */
+  path: string
+  /** Size of the PDF in bytes. */
+  bytes: number
+}
+
 /** `browser.evaluate` parameters. */
 export interface EvaluateParams {
   expression: string

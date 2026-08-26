@@ -12,8 +12,10 @@
  * compiles without depending on the playwright type package at build time.
  */
 
-import { existsSync, openSync, readSync, closeSync, statSync } from 'node:fs'
-import type { ErrorCode, NavigateParams, NavigateResult, ClickParams, ClickResult, TypeParams, TypeResult, EvaluateParams, EvaluateResult, ScreenshotParams, ScreenshotResult, StatusResult, SnapshotParams, SnapshotNode, SnapshotResult, NavigationResult, ScrollParams, ScrollResult, PressParams, PressResult, WaitParams, WaitResult, HoverParams, HoverResult, CookiesParams, CookiesResult, ConsoleMessagesParams, ConsoleMessagesResult, NetworkRequestsParams, NetworkRequestsResult, I18nTemplate, BrowserUseConfig } from './types.js'
+import { existsSync, openSync, readSync, closeSync, statSync, writeFileSync, mkdirSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import type { ErrorCode, NavigateParams, NavigateResult, ClickParams, ClickResult, TypeParams, TypeResult, EvaluateParams, EvaluateResult, ScreenshotParams, ScreenshotResult, StatusResult, SnapshotParams, SnapshotNode, SnapshotResult, NavigationResult, ScrollParams, ScrollResult, PressParams, PressResult, WaitParams, WaitResult, HoverParams, HoverResult, CookiesParams, CookiesResult, ConsoleMessagesParams, ConsoleMessagesResult, NetworkRequestsParams, NetworkRequestsResult, PdfParams, PdfResult, I18nTemplate, BrowserUseConfig } from './types.js'
 import { t } from './i18n.js'
 
 // ── Structural Playwright types (no hard dependency) ─────────────────────
@@ -102,6 +104,7 @@ interface PwPage {
   goBack(opts?: { waitUntil?: string; timeout?: number }): Promise<{ status(): number | null; url(): string } | null>
   goForward(opts?: { waitUntil?: string; timeout?: number }): Promise<{ status(): number | null; url(): string } | null>
   reload(opts?: { waitUntil?: string; timeout?: number }): Promise<{ status(): number | null; url(): string } | null>
+  pdf(opts?: { format?: string; printBackground?: boolean; path?: string }): Promise<Buffer>
   keyboard: PwKeyboard
   on(event: 'dialog', handler: (dialog: PwDialog) => void): void
   on(event: 'console', handler: (message: PwConsoleMessage) => void): void
@@ -828,6 +831,33 @@ export class BrowserSession {
     await page.evaluate('window.scrollTo(0, 0)').catch(() => undefined)
     if (buffers.length === 0) buffers.push(await page.screenshot({ type, quality }))
     return buffers
+  }
+
+  /**
+   * Print the current page to a PDF. When `path` is omitted the PDF is written
+   * to a temp file; the result always reports the absolute path and byte size so
+   * the agent can hand the artifact off (e.g. for further processing).
+   */
+  async pdf(params: PdfParams): Promise<PdfResult> {
+    if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
+    const page = this.requirePage()
+    try {
+      const format = params.format || 'A4'
+      const printBackground = params.printBackground !== false
+      const buf = await page.pdf({ format, printBackground })
+      let outPath = params.path ?? ''
+      if (!outPath) {
+        outPath = join(tmpdir(), `browser-use-${Date.now()}.pdf`)
+      } else {
+        const dir = outPath.slice(0, Math.max(outPath.lastIndexOf('/'), outPath.lastIndexOf('\\')) + 1)
+        if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true })
+      }
+      writeFileSync(outPath, buf)
+      return { url: page.url(), path: outPath, bytes: buf.length }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
+    }
   }
 
   /**

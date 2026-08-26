@@ -22,6 +22,7 @@ import type {
   ScrollParams, ScrollResult, PressParams, PressResult, WaitParams, WaitResult,
   HoverParams, HoverResult, CookiesParams, CookiesResult,
   ConsoleMessagesParams, ConsoleMessagesResult, NetworkRequestsParams, NetworkRequestsResult,
+  PdfParams, PdfResult,
   ResultEnvelope, Usage, ErrorCode, BrowserUseConfig, PreparedImage,
 } from './types.js'
 import { t } from './i18n.js'
@@ -602,6 +603,25 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         const p = (args ?? {}) as NetworkRequestsParams
         try {
           return ok(await session.networkRequests(p))
+        } catch (err) { return fail(err) }
+      },
+    },
+
+    {
+      name: 'browser_pdf',
+      description: 'Print the current page to a PDF and return its absolute path and byte size. When `path` is omitted it writes to a temp file.',
+      parameters: objSchema({
+        path: { type: 'string', description: 'Output PDF path (optional; defaults to a temp file).' },
+        format: { type: 'string', description: 'Page format, e.g. A4 (default) or Letter.' },
+        printBackground: { type: 'boolean', description: 'Print background graphics (default true).' },
+      }),
+      output: { schema: envelopeSchema(), render: renderText },
+      timeoutMs: 30_000,
+      isConcurrencySafe: () => false,
+      async execute(args: unknown): Promise<ResultEnvelope<PdfResult>> {
+        const p = (args ?? {}) as PdfParams
+        try {
+          return ok(await session.pdf(p))
         } catch (err) { return fail(err) }
       },
     },

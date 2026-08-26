@@ -29,6 +29,7 @@ All tools live in the `browser_*` namespace and return a unified envelope
 | `browser_cookies` | Read / clear / add cookies | `clear?` / `cookies?` |
 | `browser_console_messages` | Capture console output | `clear?` |
 | `browser_network_requests` | Capture network requests | `clear?` |
+| `browser_pdf` | Print the page to a PDF | `path?` / `format?` |
 | `browser_status` | Check availability + config | — |
 
 ## Common workflow
