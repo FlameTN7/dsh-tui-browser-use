@@ -137,6 +137,44 @@ async function visionEnvOrNull(deps: ToolDeps): Promise<VisionEnv | null> {
   return deps.visionMode !== 'off' ? deps.resolveVisionEnv() : null
 }
 
+/**
+ * Run one vision extract with validate-on-failure retry (≤2 retries, P0-4).
+ *
+ * Each retry appends the concrete violation/parse error so the model can
+ * self-correct instead of the tool hard-failing a transitory miss. `call`
+ * isolates the harness-specific image capture + vision read so this loop is
+ * pure and unit-testable without a browser or live model.
+ */
+export async function extractWithRetry(
+  call: (instruction: string) => Promise<{ insight: string; usage: Usage }>,
+  schema: SchemaNode,
+  baseInstruction: string,
+): Promise<{ data: unknown; usage: Usage; attempts: number }> {
+  const maxAttempts = 3
+  let lastErr = ''
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    let instruction = baseInstruction
+    if (attempt > 1) {
+      instruction += attempt === 2
+        ? ` Your previous reply was not a JSON object satisfying the schema. Fix it and retry. Last problem: ${lastErr}`
+        : ` Your previous replies still failed. Re-read the screenshot and return ONLY a valid JSON object satisfying the schema. Last problem: ${lastErr}`
+    }
+    const res = await call(instruction)
+    const data = parseJsonReply(res.insight)
+    if (data === undefined) {
+      lastErr = `vision model did not return parseable JSON; raw: ${res.insight.slice(0, 120)}`
+      continue
+    }
+    const violations = validateJsonSchema(schema, data)
+    if (violations.length > 0) {
+      lastErr = violations.join('; ')
+      continue
+    }
+    return { data, usage: res.usage, attempts: attempt }
+  }
+  throw new Error(lastErr)
+}
+
 
 /**
  * Build all tool definitions. `deps` may be a stub at build time; the
@@ -269,16 +307,23 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
           if (!env) return fail(t('error.vision-unavailable', lang))
           const images = await capturePreparedImages(session)
           const { analyzeImages } = await import('./vision.js')
-          const res = await analyzeImages(env, images, p.instruction ?? 'Extract structured data from the screenshot. Return ONLY a JSON object that satisfies the provided JSON Schema. Do not wrap it in markdown or add commentary.')
-          const data = parseJsonReply(res.insight)
-          if (data === undefined) {
-            return fail(t('error.schema-validation', lang, { message: 'vision model did not return parseable JSON; raw: ' + res.insight.slice(0, 120) }))
+
+          // The schema contract is asserted on every attempt so the model never
+          // drifts into prose even when a caller supplies a bare instruction.
+          const baseInstruction = p.instruction
+            ? `${p.instruction} Return ONLY a JSON object that satisfies the provided JSON Schema. Do not wrap it in markdown or add commentary.`
+            : 'Extract structured data from the screenshot. Return ONLY a JSON object that satisfies the provided JSON Schema. Do not wrap it in markdown or add commentary.'
+
+          try {
+            const { data, usage } = await extractWithRetry(
+              (instruction) => analyzeImages(env, images, instruction),
+              p.schema as SchemaNode,
+              baseInstruction,
+            )
+            return ok({ data }, usage)
+          } catch (retryErr) {
+            return fail(t('error.schema-validation', lang, { message: retryErr instanceof Error ? retryErr.message : String(retryErr) }))
           }
-          const violations = validateJsonSchema(p.schema as SchemaNode, data)
-          if (violations.length > 0) {
-            return fail(t('error.schema-validation', lang, { message: violations.join('; ') }))
-          }
-          return ok({ data }, res.usage)
         } catch (err) { return fail(err) }
       },
     },
