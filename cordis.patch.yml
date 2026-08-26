@@ -1,0 +1,17 @@
+# dsh-tui-browser-use profile patch
+# Mounts the browser toolset alongside dsh-tui in the agent composition.
+
+- insert:
+    - id: dsh-tui-browser-use
+      name: 'dsh-tui-browser-use'
+      config:
+        visionMode: 'auto'
+        screenshot:
+          format: 'jpeg'
+          quality: 80
+          maxDimension: '1024x768'
+        tiling:
+          mode: 'auto'
+          threshold: '1200x1200'
+          overlap: 60
+        providers: []

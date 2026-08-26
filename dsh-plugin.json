@@ -1,0 +1,29 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Yan-Zero/dsh-std/main/packages/manifest/schema/dsh-plugin-0.15.schema.json",
+  "manifestVersion": "0.15",
+  "id": "dsh-tui-browser-use",
+  "name": "dsh-tui-browser-use",
+  "version": "0.1.0",
+  "facets": {
+    "host": {
+      "entry": "lib/types/index.js",
+      "apiVersion": "v1alpha1"
+    }
+  },
+  "license": "MIT",
+  "source": {
+    "repository": "https://github.com/FlameTN7/dsh-tui-browser-use-plugin"
+  },
+  "requires": {
+    "contracts": [],
+    "services": []
+  },
+  "permissions": [],
+  "contributes": {
+    "commands": []
+  },
+  "subscriptions": [],
+  "compat": {
+    "hosts": ["dsh-tui"]
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "name": "dsh-tui-browser-use",
+  "version": "0.1.0",
+  "description": "Browser automation toolset for dsh-tui agents: Playwright-driven browser control with deepseek-v4-flash-vision-exp visual understanding.",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/types/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/types/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "skills",
+    "dsh-plugin.json",
+    "cordis.patch.yml"
+  ],
+  "engines": {
+    "node": "^22.19 || >=24"
+  },
+  "scripts": {
+    "clean": "rm -rf lib",
+    "compile": "npm run clean && tsc -p tsconfig.json",
+    "build": "npm run compile",
+    "check": "npm run build && npm run smoke && npm run verify:manifest && npm run verify:i18n && npm run router:check",
+    "postinstall": "node scripts/postinstall.mjs",
+    "smoke": "node --import tsx/esm scripts/smoke.ts",
+    "router:check": "node scripts/router-check.mjs",
+    "test:integration": "node --import tsx/esm scripts/browser-integration.ts",
+    "test:container": "node scripts/container-register-check.mjs",
+    "test:vision": "node scripts/vision-check.mjs",
+    "test:vision-router": "node scripts/vision-router-check.mjs",
+    "test:vision-textonly": "node scripts/vision-textonly-check.mjs",
+    "test:vision-tiling": "node scripts/vision-tiling-check.mjs",
+    "test:vision-mimo": "node scripts/vision-mimo-check.mjs",
+    "test:real-task": "node scripts/real-task-check.mjs",
+    "test:real-extract": "node scripts/real-extract-check.mjs",
+    "test:real-interact": "node scripts/real-interact-check.mjs",
+    "verify:manifest": "node --import tsx/esm scripts/verify-manifest.mjs",
+    "verify:i18n": "node --import tsx/esm scripts/verify-i18n.mjs"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "playwright": "^1.49.0"
+  },
+  "devDependencies": {
+    "@dsh-std/manifest": "^0.1.1-rc.1",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.5.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
