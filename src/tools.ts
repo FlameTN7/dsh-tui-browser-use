@@ -60,15 +60,25 @@ function ok<T>(value: T, usage?: Usage): ResultEnvelope<T> {
   return usage !== undefined ? { ok: true, value, usage } : { ok: true, value }
 }
 
+// ANSI escape sequences (most commonly color) leak into browser/error text on
+// some engines. Strip them from any message the model can see, and cap length so
+// a huge call-log snippet cannot blow the context (P2 #12).
+const ANSI_RE = /\x1b\[[0-9;?]*[a-zA-Z]/g
+const MAX_MSG = 2000
+
+function sanitizeMessage(msg: string): string {
+  return msg.replace(ANSI_RE, '').slice(0, MAX_MSG)
+}
+
 /** Convert an error into a failure envelope. */
 function fail(err: unknown): ResultEnvelope<never> {
   if (err && typeof err === 'object' && 'code' in err && 'message' in err) {
     const code = (err as { code: ErrorCode }).code
-    const message = (err as { message: string }).message
+    const message = sanitizeMessage((err as { message: string }).message)
     return { ok: false, error: { code, message } }
   }
   const msg = err instanceof Error ? err.message : String(err)
-  return { ok: false, error: { code: 'browser-error', message: msg } }
+  return { ok: false, error: { code: 'browser-error', message: sanitizeMessage(msg) } }
 }
 
 /** Render a snapshot of the value as compact text content for the model. */
