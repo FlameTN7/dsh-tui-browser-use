@@ -128,6 +128,7 @@ multi-modal routes. Production does **not** read `llm-pi-ai.providers` from harn
 | `DSH_TUI_BROWSER_DIALOG` | Dialog handling: `dismiss` (default) / `accept` / `ignore` |
 | `DSH_TUI_BROWSER_USER_DATA_DIR` | Chromium user data dir (persist cookies/localStorage/login across runs) |
 | `DSH_TUI_BROWSER_STORAGE_STATE` | storageState snapshot path (loaded on start, saved on close) |
+| `DSH_TUI_BROWSER_MAX_TILES` | Max scroll-capture tile count (default 12) |
 
 ## Vision pipeline
 

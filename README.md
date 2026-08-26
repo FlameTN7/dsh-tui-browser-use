@@ -123,6 +123,7 @@ harness settings 的 `llm-pi-ai.providers`**（实测该 namespace 未注册到 
 | `DSH_TUI_BROWSER_DIALOG` | 弹窗处理：`dismiss`（默认）/ `accept` / `ignore` |
 | `DSH_TUI_BROWSER_USER_DATA_DIR` | Chromium 用户数据目录（持久化 cookie/localStorage/登录态） |
 | `DSH_TUI_BROWSER_STORAGE_STATE` | storageState 快照路径（启动导入 + 关闭导出 cookie/localStorage） |
+| `DSH_TUI_BROWSER_MAX_TILES` | 滚屏切分最大段数（默认 12） |
 
 ## 视觉管线
 
