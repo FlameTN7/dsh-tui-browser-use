@@ -174,6 +174,10 @@ npm run test:real-interact # 真实外网 duckduckgo 走代理 type+click
 - 安装时 `postinstall` 引导浏览器就绪：检测系统 Chrome / Playwright Chromium，缺失时输出
   可复制命令（Linux 为 `npx playwright install chromium --with-deps`，Windows/macOS 为
   `npx playwright install chromium`）。
+- **跨引擎**：`DSH_TUI_BROWSER_ENGINE=firefox|webkit` 选非 chromium 引擎（Chromium/Firefox/WebKit
+  三引擎均实测可用）。Firefox 用 `npx playwright install firefox`；WebKit 需再加
+  `npx playwright install-deps webkit` 装系统库（apt 拉 libmanette/libenchant/libhyphen/
+  libsecret/libgles2 等）。
 - 启动时浏览器源探测：**系统 Chrome（`channel: 'chrome'`）→ 显式二进制（`DSH_TUI_BROWSER_EXECUTABLE`
   环境变量 / 常见 `/usr/bin/chromium*`、`/opt/chromium-*` 路径）→ Playwright 自带 Chromium**，
   哪个可用用哪个。受限容器里 Playwright 官方下载常因 CDN 缺 build 失败，可用

@@ -179,6 +179,10 @@ via `ctx.get(...)` with structural typing.
 - On install, a `postinstall` hook bootstraps the browser: detects system Chrome / Playwright
   Chromium, and when missing prints a copyable command (Linux: `npx playwright install chromium
   --with-deps`; Windows/macOS: `npx playwright install chromium`).
+- **Cross-engine**: `DSH_TUI_BROWSER_ENGINE=firefox|webkit` selects a non-chromium engine
+  (Chromium/Firefox/WebKit all verified). Firefox via `npx playwright install firefox`; WebKit also
+  needs `npx playwright install-deps webkit` for its system libs (apt pulls libmanette/libenchant/
+  libhyphen/libsecret/libgles2, etc.).
 - At startup, browser-source detection: **system Chrome (`channel: 'chrome'`) → explicit binary
   (`DSH_TUI_BROWSER_EXECUTABLE` env var / common `/usr/bin/chromium*`, `/opt/chromium-*` paths) →
   Playwright's own Chromium**, whichever is available. In constrained containers Playwright's
