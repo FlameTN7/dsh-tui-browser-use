@@ -42,10 +42,25 @@ try {
       return registered.map((d) => ({ name: d.name }))
     },
   }
+  // The plugin injects the `settings` service to register the `browser-use`
+  // settings namespace (fixes the TUI /settings "[命名空间未注册]"). Emulate a
+  // minimal settings service + `ctx.inject` so apply() exercises that path.
+  const registeredNamespaces = []
+  const stubSettings = {
+    register(ns, schema) {
+      registeredNamespaces.push(ns)
+      return () => {}
+    },
+  }
   const ctx = {
     get(name, optional) {
       if (name === 'tools') return stubTools
+      if (name === 'settings') return stubSettings
       return undefined
+    },
+    inject(services, cb) {
+      cb({ get: (n) => (n === 'settings' ? stubSettings : undefined) })
+      return () => {}
     },
     effect(fn) {
       const d = fn()
@@ -63,6 +78,11 @@ try {
   log('calling apply')
   plugin.apply(ctx, config)
   log('apply returned')
+
+  // The settings namespace must have been registered (TUI /settings renders it
+  // as served rather than "[命名空间未注册]").
+  assert.ok(registeredNamespaces.includes('browser-use'), 'browser-use settings namespace registered')
+  log('settings namespaces = ' + registeredNamespaces.join(','))
 
   const names = registered.map((d) => d.name)
   log('tools registered = ' + registered.length)

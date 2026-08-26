@@ -59,6 +59,32 @@ export const Config: Schema<Config> = Schema.object({
   })).default([]),
 })
 
+/**
+ * The `browser-use` settings-namespace schema (the user-editable fields the TUI
+ * section renders). It mirrors the plugin Config minus `lang`, so the settings
+ * screen can persist/stage edits to the same fields the plugin reads.
+ */
+const settingsNamespaceSchema = Schema.object({
+  visionMode: Schema.union(['auto', 'on', 'off', 'deepseek-file-api'] as const).default('auto'),
+  screenshot: Schema.object({
+    format: Schema.union(['jpeg', 'webp', 'png'] as const).default('jpeg'),
+    quality: Schema.number().min(1).max(100).default(80),
+    maxDimension: Schema.string().default('1024x768'),
+  }),
+  tiling: Schema.object({
+    mode: Schema.union(['auto', 'on', 'off'] as const).default('auto'),
+    threshold: Schema.string().default('1200x1200'),
+    overlap: Schema.number().min(0).default(60),
+  }),
+  providers: Schema.array(Schema.object({
+    provider: Schema.string().required(),
+    supportsVision: Schema.boolean().default(false),
+    imageTransfer: Schema.union(['file', 'base64', 'url', 'none'] as const).default('none'),
+    maxImageBytes: Schema.number().required(false),
+    detailPreference: Schema.union(['high', 'low', 'auto'] as const).required(false),
+  })).default([]),
+})
+
 // ── Harness access helpers (structural, never self-manage secrets) ──────
 
 type CredentialsLike = {
@@ -177,6 +203,25 @@ export function apply(ctx: Context, config: Config): void {
     if (process.env.DSH_TUI_BROWSER_DEBUG) process.stderr.write(`[dsh-tui-browser-use] ${msg}\n`)
   }
   const settingsDisposer = registerSettingsSection(ctx, debug)
+
+  // Register the `browser-use` settings namespace on the harness settings service
+  // so the TUI /settings screen serves it — without this the section renders as
+  // '[命名空间未注册]' (mirrors dsh-tui's own namespace registration). A harness
+  // without a settings service just skips; it must never block tool registration.
+  if (typeof ctx.inject === 'function') {
+    ctx.inject(['settings'], (settingsCtx) => {
+      const settings = (settingsCtx.get('settings') as
+        { register?(ns: string, schema: unknown): unknown } | undefined)
+      if (settings?.register) {
+        settings.register('browser-use', settingsNamespaceSchema)
+        debug('settings namespace registered: ns=browser-use')
+      } else {
+        debug('settings.service present but register() missing; namespace skipped')
+      }
+    })
+  } else {
+    debug('ctx.inject unavailable; settings namespace not registered')
+  }
 
   // Diagnostics: confirm the tools actually registered and the seam shape.
   if (process.env.DSH_TUI_BROWSER_DEBUG) {
