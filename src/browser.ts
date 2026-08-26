@@ -51,8 +51,18 @@ interface PwPage {
   getByText(text: string): PwLocator
   getByRole(role: string, opts?: { name?: string }): PwLocator
   getByLabel(text: string): PwLocator
+  frames(): PwFrame[]
   waitForLoadState(state?: string): Promise<void>
   setViewportSize(size: { width: number; height: number }): Promise<void>
+}
+
+/** A child frame, with the same locator query surface as the page. */
+interface PwFrame {
+  locator(selector: string): PwLocator
+  getByText(text: string): PwLocator
+  getByRole(role: string, opts?: { name?: string }): PwLocator
+  getByLabel(text: string): PwLocator
+  url(): string
 }
 
 interface PwBrowser {
@@ -138,18 +148,44 @@ async function waitForLocator(locator: PwLocator, timeoutMs = 6000): Promise<voi
  * Prefers the semantically-stable text/role match over brittle CSS class chains
  * (dynamic sites compile/hash their class names; accessible names do not).
  */
-function resolveLocator(page: PwPage, selector?: string, text?: string): PwLocator {
+function resolveLocator(target: PwPage | PwFrame, selector?: string, text?: string): PwLocator {
   if (text !== undefined && text.length > 0) {
-    return page.getByText(text)
+    return target.getByText(text)
   }
   if (selector && /^role=/.test(selector)) {
     const m = /^role=([a-z]+)(?:\[name=(.+)\])?/i.exec(selector)
-    if (m?.[1]) return page.getByRole(m[1], m[2] !== undefined ? { name: m[2] } : undefined)
+    if (m?.[1]) return target.getByRole(m[1], m[2] !== undefined ? { name: m[2] } : undefined)
   }
   if (selector && /^label=/.test(selector)) {
-    return page.getByLabel(selector.slice('label='.length))
+    return target.getByLabel(selector.slice('label='.length))
   }
-  return page.locator(selector ?? '')
+  return target.locator(selector ?? '')
+}
+
+/**
+ * Resolve an actionable locator across the page and its child frames. Tries the
+ * main frame first, then each `page.frames()` (iframe), so a selector/text that
+ * lives inside an embedded frame is still found. Uses `count()` (async) to pick
+ * the first candidate that actually matches, rather than assuming a frame owns
+ * the target. Returns the main-frame locator as a fallback.
+ */
+async function resolveFrameAware(page: PwPage, selector?: string, text?: string): Promise<PwLocator> {
+  const main = resolveLocator(page, selector, text)
+  // Count is async, but a bare empty selector is never actionable.
+  if (selector === undefined && text === undefined) return main
+  try {
+    const mainCount = await main.count()
+    if (mainCount > 0) return main
+  } catch { /* ignore and fall through to frames */ }
+  const frames = page.frames()
+  for (const frame of frames) {
+    const loc = resolveLocator(frame, selector, text)
+    try {
+      const n = await loc.count()
+      if (n > 0) return loc
+    } catch { /* try next frame */ }
+  }
+  return main
 }
 
 /**
@@ -353,8 +389,9 @@ export class BrowserSession {
     const before = page.url()
     try {
       // `text` (visible text) wins over `selector` (CSS); a bare selector keeps
-      // using the CSS path. Wait for the target to be actionable (SPA/lazy).
-      const locator = resolveLocator(page, params.selector, params.text)
+      // using the CSS path. Searches main frame then child frames (iframe).
+      // Wait for the target to be actionable (SPA/lazy).
+      const locator = await resolveFrameAware(page, params.selector, params.text)
       await waitForLocator(locator)
       await locator.first().click()
       await page.waitForLoadState('load').catch(() => undefined)
@@ -369,10 +406,12 @@ export class BrowserSession {
     if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
     const page = this.requirePage()
     try {
-      // `type` uses a CSS selector (the caller queries the field). Wait for the
-      // input before filling so a SPA that mounts its form late doesn't miss.
-      await waitForLocator(page.locator(params.selector))
-      await page.locator(params.selector).first().fill(params.text)
+      // `type` uses a CSS selector (the caller queries the field). Search main
+      // frame then child frames, and wait for the input before filling so a SPA
+      // that mounts its form late doesn't miss.
+      const locator = await resolveFrameAware(page, params.selector, undefined)
+      await waitForLocator(locator)
+      await locator.first().fill(params.text)
       return { success: true }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)

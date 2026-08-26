@@ -38,6 +38,42 @@ export interface VisionResult {
   usage: Usage
 }
 
+// ── Cost rate (per 1M tokens) ────────────────────────────────────────────
+//
+// DeepSeek's directory-cache pricing is far below the miss rate and its vision
+// model (deepseek-v4-flash-vision-exp) prices the same as V4-Flash. Rather than
+// hard-code one day's price, the rate is configurable via env vars
+// (DSH_TUI_BROWSER_INPUT_RATE / _OUTPUT_RATE, USD per 1M tokens) and falls back
+// to this default. Cache-hit pricing is a single `cacheHitRate` (USD per 1M).
+const RATE_ENV = {
+  input: 'DSH_TUI_BROWSER_INPUT_RATE',
+  output: 'DSH_TUI_BROWSER_OUTPUT_RATE',
+  cacheHit: 'DSH_TUI_BROWSER_CACHE_HIT_RATE',
+} as const
+
+// Default DeepSeek V4-Flash / vision prices (USD per 1M tokens). These are
+// estimates from public pricing; deployments should override the env vars.
+const DEFAULT_RATES = {
+  input: 0.28,
+  output: 0.42,
+  cacheHit: 0.028,
+} as const
+
+type CostRates = { input: number; output: number; cacheHit: number }
+
+function costRates(): CostRates {
+  const num = (envName: string, fallback: number): number => {
+    const v = process.env[envName]
+    const n = v ? Number.parseFloat(v) : NaN
+    return Number.isFinite(n) && n >= 0 ? n : fallback
+  }
+  return {
+    input: num(RATE_ENV.input, DEFAULT_RATES.input),
+    output: num(RATE_ENV.output, DEFAULT_RATES.output),
+    cacheHit: num(RATE_ENV.cacheHit, DEFAULT_RATES.cacheHit),
+  }
+}
+
 /** Estimate token/cost for a set of images + text (best-effort). */
 function estimateUsage(model: string, visionMode: VisionMode, imagesSent: number, textLength: number): Usage {
   // Rough approximation used only when the provider returns no usage block:
@@ -46,10 +82,17 @@ function estimateUsage(model: string, visionMode: VisionMode, imagesSent: number
   const textTokens = Math.ceil(textLength / 4)
   const promptTokens = imageTokens + textTokens
   const completionTokens = Math.ceil(textLength / 8)
-  // USD pricing is a placeholder; callers should refine via provider settings.
-  const costUsd = (promptTokens * 0.00000006 + completionTokens * 0.00000006)
+  const rates = costRates()
+  const costUsd = (promptTokens * rates.input + completionTokens * rates.output) / 1_000_000
   const costCny = costUsd * 7.2
   return { model, visionMode, imagesSent, promptTokens, completionTokens, costUsd, costCny }
+}
+
+/** Compute cost (USD/CNY) from real prompt/completion token counts. */
+function costFromUsage(promptTokens: number, completionTokens: number): { costUsd: number; costCny: number } {
+  const rates = costRates()
+  const costUsd = (promptTokens * rates.input + completionTokens * rates.output) / 1_000_000
+  return { costUsd, costCny: costUsd * 7.2 }
 }
 
 /** One content block in a chat completions message. */
@@ -203,7 +246,13 @@ async function chatWithImages(env: VisionEnv, images: PreparedImage[], instructi
     costUsd: 0,
     costCny: 0,
   }
-  if (!body.usage) {
+  if (body.usage) {
+    // Real token counts → compute cost against the configured rates so the
+    // agent sees an actual (not placeholder) spend on browser_task.
+    const c = costFromUsage(usage.promptTokens, usage.completionTokens)
+    usage.costUsd = c.costUsd
+    usage.costCny = c.costCny
+  } else {
     // Fall back to the estimate so callers always see a usage block.
     const est = estimateUsage(env.model, usage.visionMode, images.length, text.length)
     usage.promptTokens = est.promptTokens
