@@ -115,6 +115,9 @@ harness settings 的 `llm-pi-ai.providers`**（实测该 namespace 未注册到 
 | `DSH_TUI_BROWSER_TIMEOUT_NAVIGATION` | 导航超时 ms（默认 45000，`goto/back/forward/reload`） |
 | `DSH_TUI_BROWSER_TIMEOUT_ACTION` | 交互超时 ms（默认 12000，`click/type` 等待元素可交互） |
 | `DSH_TUI_BROWSER_TIMEOUT_SETTLE` | 等待/收敛超时 ms（默认 6000，`wait` 的 selector 等待） |
+| `DSH_TUI_BROWSER_DIALOG` | 弹窗处理：`dismiss`（默认）/ `accept` / `ignore` |
+| `DSH_TUI_BROWSER_USER_DATA_DIR` | Chromium 用户数据目录（持久化 cookie/localStorage/登录态） |
+| `DSH_TUI_BROWSER_STORAGE_STATE` | storageState 快照路径（启动导入 + 关闭导出 cookie/localStorage） |
 
 ## 视觉管线
 

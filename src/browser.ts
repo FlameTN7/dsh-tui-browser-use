@@ -42,6 +42,14 @@ interface PwKeyboard {
   press(key: string): Promise<void>
 }
 
+/** A browser dialog (alert/confirm/prompt/beforeunload). */
+interface PwDialog {
+  accept(): Promise<void>
+  dismiss(): Promise<void>
+  type(): string
+  message(): string
+}
+
 interface PwPage {
   goto(url: string, opts?: { waitUntil?: string; timeout?: number }): Promise<{ status(): number | null; url(): string } | null>
   title(): Promise<string>
@@ -64,6 +72,7 @@ interface PwPage {
   goForward(opts?: { waitUntil?: string; timeout?: number }): Promise<{ status(): number | null; url(): string } | null>
   reload(opts?: { waitUntil?: string; timeout?: number }): Promise<{ status(): number | null; url(): string } | null>
   keyboard: PwKeyboard
+  on(event: 'dialog', handler: (dialog: PwDialog) => void): void
 }
 
 /** A child frame, with the same locator query surface as the page. */
@@ -75,9 +84,17 @@ interface PwFrame {
   url(): string
 }
 
+/** A browser context (cookie/localStorage isolation; storageState persistence). */
+interface PwContext {
+  newPage(): Promise<PwPage>
+  storageState(opts?: { path?: string }): Promise<Record<string, unknown>>
+  close(): Promise<void>
+}
+
 interface PwBrowser {
   close(): Promise<void>
   newPage(): Promise<PwPage>
+  newContext(opts?: { storageState?: string }): Promise<PwContext>
   version(): string
   context(): { newPage(): Promise<PwPage> }
 }
@@ -87,7 +104,7 @@ interface PwChromium {
 }
 
 /** Common launch options shared by every Playwright browser engine. */
-type PwLaunchOptions = { channel?: string; executablePath?: string; headless?: boolean; args?: string[]; proxy?: { server: string; bypass?: string } }
+type PwLaunchOptions = { channel?: string; executablePath?: string; headless?: boolean; args?: string[]; proxy?: { server: string; bypass?: string }; userDataDir?: string }
 
 interface PwModule {
   chromium: PwChromium
@@ -144,6 +161,17 @@ function browserProxy(): { server: string; bypass?: string } | undefined {
   const bypass = process.env.DSH_TUI_BROWSER_PROXY_BYPASS ??
     'localhost,127.0.0.1,::1,10.0.8.1'
   return { server: v, bypass }
+}
+
+/**
+ * How to handle a browser dialog (alert/confirm/prompt/beforeunload). Dialogs
+ * block the page and would otherwise hang an agent action; Playwright auto-dismisses
+ * them, but we make the behavior explicit and configurable.
+ */
+function dialogMode(): 'accept' | 'dismiss' | 'ignore' {
+  const v = process.env.DSH_TUI_BROWSER_DIALOG
+  if (v === 'accept' || v === 'ignore') return v
+  return 'dismiss'
 }
 
 /**
@@ -269,6 +297,7 @@ function envNum(name: string, fallback: number): number {
 export class BrowserSession {
   private engine: PwBrowser | null = null
   private page: PwPage | null = null
+  private ctx: PwContext | null = null
   private pw: PwModule | null = null
   private startError: string | null = null
   private lang: 'zh' | 'en'
@@ -287,12 +316,24 @@ export class BrowserSession {
   private readonly actionTimeoutMs: number
   private readonly settleTimeoutMs: number
 
+  // ── Session-state persistence (P1 #8) ───────────────────────────────────
+  // userDataDir retains the full browser profile (cookies/localStorage) across
+  // runs; storageStatePath exports/imports a bare cookie+localStorage snapshot.
+  // Both are env-driven (DSH_TUI_BROWSER_USER_DATA_DIR / _STORAGE_STATE); a
+  // missing or unreadable path degrades to a fresh session rather than failing.
+  private readonly userDataDir: string | undefined
+  private readonly storageStatePath: string | undefined
+  private readonly dialog: 'accept' | 'dismiss' | 'ignore'
+
   constructor(config: BrowserUseConfig, lang: 'zh' | 'en') {
     this.config = config
     this.lang = lang
     this.navTimeoutMs = envNum('DSH_TUI_BROWSER_TIMEOUT_NAVIGATION', 45_000)
     this.actionTimeoutMs = envNum('DSH_TUI_BROWSER_TIMEOUT_ACTION', 12_000)
     this.settleTimeoutMs = envNum('DSH_TUI_BROWSER_TIMEOUT_SETTLE', 6_000)
+    this.dialog = dialogMode()
+    this.userDataDir = process.env.DSH_TUI_BROWSER_USER_DATA_DIR || undefined
+    this.storageStatePath = process.env.DSH_TUI_BROWSER_STORAGE_STATE || undefined
   }
 
   /**
@@ -375,7 +416,7 @@ export class BrowserSession {
         // Probe system Chrome first (fewest install friction on most dev boxes).
         const chromiumArgs = engineLaunchArgs('chromium')
         try {
-          this.engine = await pw.chromium.launch({ channel: 'chrome', headless: true, args: chromiumArgs, ...(proxy ? { proxy } : {}) })
+          this.engine = await pw.chromium.launch({ channel: 'chrome', headless: true, args: chromiumArgs, ...(proxy ? { proxy } : {}), ...(this.userDataDir ? { userDataDir: this.userDataDir } : {}) })
         } catch {
           const executablePath = this.resolveExecutablePath()
           if (executablePath) {
@@ -383,19 +424,39 @@ export class BrowserSession {
             // it still fails (e.g. an imperfect binary), fall through to the
             // Playwright-bundled Chromium rather than surfacing the error.
             try {
-              this.engine = await pw.chromium.launch({ executablePath, headless: true, args: chromiumArgs, ...(proxy ? { proxy } : {}) })
+              this.engine = await pw.chromium.launch({ executablePath, headless: true, args: chromiumArgs, ...(proxy ? { proxy } : {}), ...(this.userDataDir ? { userDataDir: this.userDataDir } : {}) })
             } catch {
-              this.engine = await pw.chromium.launch({ headless: true, args: chromiumArgs, ...(proxy ? { proxy } : {}) })
+              this.engine = await pw.chromium.launch({ headless: true, args: chromiumArgs, ...(proxy ? { proxy } : {}), ...(this.userDataDir ? { userDataDir: this.userDataDir } : {}) })
             }
           } else {
             // Final fall back to the Playwright-bundled Chromium.
-            this.engine = await pw.chromium.launch({ headless: true, args: chromiumArgs, ...(proxy ? { proxy } : {}) })
+            this.engine = await pw.chromium.launch({ headless: true, args: chromiumArgs, ...(proxy ? { proxy } : {}), ...(this.userDataDir ? { userDataDir: this.userDataDir } : {}) })
           }
         }
       }
       const dim = dimensionPair(this.config.screenshot.maxDimension)
-      this.page = await this.engine.newPage()
+      // Session-state persistence (P1 #8): when DSH_TUI_BROWSER_STORAGE_STATE
+      // is set, create an explicit context (preloaded from the snapshot if it
+      // already exists) so a login state can be saved back on close. Otherwise
+      // use the browser's default context.
+      if (this.storageStatePath) {
+        const ctx = await this.engine.newContext({
+          storageState: existsSync(this.storageStatePath) ? this.storageStatePath : undefined,
+        })
+        this.ctx = ctx
+        this.page = await ctx.newPage()
+      } else {
+        this.page = await this.engine.newPage()
+      }
       await this.page.setViewportSize({ width: dim.width, height: dim.height })
+      // Dialog handling: by default dismiss alert/confirm/prompt so a blocking
+      // dialog cannot hang an agent action. `DSH_TUI_BROWSER_DIALOG=accept` or
+      // `ignore` opts in/out of dismissing.
+      if (this.dialog !== 'ignore') {
+        this.page.on('dialog', (d) => {
+          void (this.dialog === 'accept' ? d.accept() : d.dismiss()).catch(() => undefined)
+        })
+      }
       this.startError = null
       return true
     } catch (err) {
@@ -415,9 +476,14 @@ export class BrowserSession {
   /** Release the browser and mark the session unstarted. */
   async close(): Promise<void> {
     if (this.engine) {
+      // Persist a login snapshot back to the configured path (best-effort).
+      if (this.storageStatePath && this.ctx) {
+        try { await this.ctx.storageState({ path: this.storageStatePath }) } catch { /* best-effort */ }
+      }
       try { await this.engine.close() } catch { /* ignore */ }
       this.engine = null
       this.page = null
+      this.ctx = null
     }
   }
 
