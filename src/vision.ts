@@ -197,6 +197,9 @@ async function chatWithImages(env: VisionEnv, images: PreparedImage[], instructi
   for (const image of images) {
     if (env.imageTransfer === 'file') {
       const fileId = image.fileId ?? (await uploadFile(env, image, baseUrl))
+      // Persist the uploaded id on the image so callers (browser_screenshot)
+      // can surface it as `fileId` instead of always seeing ''.
+      image.fileId = fileId
       content.push({ type: 'file', file_id: fileId })
     } else if (env.imageTransfer === 'base64' || env.imageTransfer === 'url') {
       const mime = image.mime

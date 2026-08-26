@@ -73,11 +73,11 @@ interface PwBrowser {
 }
 
 interface PwChromium {
-  launch(opts: { channel?: string; executablePath?: string; headless?: boolean; args?: string[]; proxy?: { server: string } }): Promise<PwBrowser>
+  launch(opts: { channel?: string; executablePath?: string; headless?: boolean; args?: string[]; proxy?: { server: string; bypass?: string } }): Promise<PwBrowser>
 }
 
 /** Common launch options shared by every Playwright browser engine. */
-type PwLaunchOptions = { channel?: string; executablePath?: string; headless?: boolean; args?: string[]; proxy?: { server: string } }
+type PwLaunchOptions = { channel?: string; executablePath?: string; headless?: boolean; args?: string[]; proxy?: { server: string; bypass?: string } }
 
 interface PwModule {
   chromium: PwChromium
@@ -96,27 +96,44 @@ function browserEngine(): 'chromium' | 'firefox' | 'webkit' {
   return 'chromium'
 }
 
+// Chromium running as root in a headless container needs these flags or the
+// first start can stall on the sandbox/GPU path and intermittently time out.
+const CONTAINER_LAUNCH_ARGS = ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+
+/**
+ * Whether to inject the container/root chromium flags. Only when running as
+ * root (sandbox can't be used) or when the user explicitly opts in via
+ * `DSH_TUI_BROWSER_NO_SANDBOX=1`. A normal non-root user keeps Chromium's
+ * sandbox (process isolation) intact — we don't silently disable security.
+ */
+function chromiumNeedsContainerArgs(): boolean {
+  if (process.env.DSH_TUI_BROWSER_NO_SANDBOX === '1') return true
+  try { return typeof process.getuid === 'function' && process.getuid() === 0 } catch { return false }
+}
+
 /**
  * Launch args appropriate to the engine. Chromium-as-root in this container
  * needs `--no-sandbox`/`--disable-dev-shm-usage`/`--disable-gpu`; Firefox/WebKit
  * do not take chromium's GPU/sandbox flags, so pass an empty args array.
  */
 function engineLaunchArgs(engine: 'chromium' | 'firefox' | 'webkit'): string[] {
-  return engine === 'chromium' ? CONTAINER_LAUNCH_ARGS : []
+  if (engine !== 'chromium') return []
+  return chromiumNeedsContainerArgs() ? CONTAINER_LAUNCH_ARGS : []
 }
-
-// Chromium runs as root in this container; headless launch needs these flags or
-// the first start can stall on the sandbox/GPU path and intermittently time out.
-const CONTAINER_LAUNCH_ARGS = ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
 
 /**
  * Optional HTTP proxy for the browser when the container must reach external
  * sites through a host proxy. Set `DSH_TUI_BROWSER_PROXY=http://host:port`.
- * Empty/absent means direct connect.
+ * Localhost / loopback are always bypassed so the proxy does not hijack local
+ * pages, tests, or same-host services; `DSH_TUI_BROWSER_PROXY_BYPASS` overrides
+ * the bypass list (comma-separated). Empty/absent means direct connect.
  */
-function browserProxy(): { server: string } | undefined {
+function browserProxy(): { server: string; bypass?: string } | undefined {
   const v = process.env.DSH_TUI_BROWSER_PROXY
-  return v && v.length > 0 ? { server: v } : undefined
+  if (!v || v.length === 0) return undefined
+  const bypass = process.env.DSH_TUI_BROWSER_PROXY_BYPASS ??
+    'localhost,127.0.0.1,::1,10.0.8.1'
+  return { server: v, bypass }
 }
 
 /**
@@ -310,8 +327,9 @@ export class BrowserSession {
         this.engine = await inject.launch({ headless: true, args: engineLaunchArgs(engine), ...(proxy ? { proxy } : {}) })
       } else {
         // Probe system Chrome first (fewest install friction on most dev boxes).
+        const chromiumArgs = engineLaunchArgs('chromium')
         try {
-          this.engine = await pw.chromium.launch({ channel: 'chrome', headless: true, args: CONTAINER_LAUNCH_ARGS, ...(proxy ? { proxy } : {}) })
+          this.engine = await pw.chromium.launch({ channel: 'chrome', headless: true, args: chromiumArgs, ...(proxy ? { proxy } : {}) })
         } catch {
           const executablePath = this.resolveExecutablePath()
           if (executablePath) {
@@ -319,13 +337,13 @@ export class BrowserSession {
             // it still fails (e.g. an imperfect binary), fall through to the
             // Playwright-bundled Chromium rather than surfacing the error.
             try {
-              this.engine = await pw.chromium.launch({ executablePath, headless: true, args: CONTAINER_LAUNCH_ARGS, ...(proxy ? { proxy } : {}) })
+              this.engine = await pw.chromium.launch({ executablePath, headless: true, args: chromiumArgs, ...(proxy ? { proxy } : {}) })
             } catch {
-              this.engine = await pw.chromium.launch({ headless: true, args: CONTAINER_LAUNCH_ARGS, ...(proxy ? { proxy } : {}) })
+              this.engine = await pw.chromium.launch({ headless: true, args: chromiumArgs, ...(proxy ? { proxy } : {}) })
             }
           } else {
             // Final fall back to the Playwright-bundled Chromium.
-            this.engine = await pw.chromium.launch({ headless: true, args: CONTAINER_LAUNCH_ARGS, ...(proxy ? { proxy } : {}) })
+            this.engine = await pw.chromium.launch({ headless: true, args: chromiumArgs, ...(proxy ? { proxy } : {}) })
           }
         }
       }
