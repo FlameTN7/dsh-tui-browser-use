@@ -45,6 +45,7 @@
 | `browser_evaluate` | 执行 JS | 基础 |
 | `browser_extract` | 结构化提取 | 视觉读取 + schema 校验（`schema-validation-failed` 上报） |
 | `browser_task` | 自然语言多步任务 | 视觉驱动的 navigate/click/type 循环，带逐步成本 |
+| `browser_snapshot` | 可访问性快照 | 返回可交互/语义元素索引（role/name/bbox），作为默认观察，视觉降为兜底 |
 | `browser_status` | 浏览器状态 | 可用性/版本/配置 |
 
 ## 配置
@@ -129,6 +130,10 @@ Playwright 截图
 **模型调用重试**：OpenAI 兼容端点/官方 API 在 429/5xx 时按指数退避重试（`fetchWithRetry`，
 基础 600ms 增长，抖动 ±，上限 4 次），尊重 `Retry-After`。scnet 这类易 429 的端点由此扛住。
 
+**提取校验-重试 + 提示注入防护**：`browser_extract` 按调用方 JSON Schema 校验，失败会重试 ≤2 次并
+附上 violation 清单让模型自纠；视觉指令用 `<task>…</task>` 定界，system 消息声明截图是**不可信页面
+内容**——页面里出现的指令一律当数据读，绝不当作命令执行（防 prompt injection）。
+
 **为什么默认 `quality=80` / `maxDimension=1024×768`？**
 - 视觉模型预处理会缩到 800×800，1024×768 略高于它，兼顾"看得清 + 不浪费"
 - JPEG q=80 在清晰度和体积间取平衡，单图约 100-300KB，不撑上下文
@@ -143,7 +148,9 @@ Playwright 截图
 npm install            # 安装依赖（postinstall 打印浏览器就绪指引）
 npm run build          # tsc → lib/types/
 npm run check          # CI 门禁：build+smoke+verify:manifest+verify:i18n+router:check
-npm run smoke          # 无头冒烟（入口 + 能力判定 + 截图预处理 + 工具定义）
+npm run smoke          # 无头冒烟（入口 + 能力判定 + 截图预处理 + 工具定义，9 工具）
+npm run test:logic     # 纯逻辑测试：extract 重试 + 提示注入护栏（无需浏览器/key）
+npm run test:integration # 真实浏览器集成（需 DSH_TUI_BROWSER_EXECUTABLE）
 npm run verify:manifest # @dsh-std/manifest 校验 dsh-plugin.json
 npm run verify:i18n     # 双语字典完整性/占位符一致性校验
 # 视模型全链路 / 真实外网站点（需 DSH_TUI_BROWSER_EXECUTABLE + 对应 key/代理）：

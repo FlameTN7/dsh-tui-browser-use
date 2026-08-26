@@ -47,6 +47,7 @@ A browser-use capability aligned with Claude Code, but natively adapted for the 
 | `browser_evaluate` | Execute JS | Basic |
 | `browser_extract` | Structured extraction | Vision read + schema validation (reports `schema-validation-failed`) |
 | `browser_task` | Natural-language multi-step task | Vision-driven navigate/click/type loop with per-step cost |
+| `browser_snapshot` | Accessibility snapshot | Returns an indexed list of interactive/semantic elements (role/name/bbox) as the default observation; vision is the fallback |
 | `browser_status` | Browser status | Availability / version / configuration |
 
 ## Configuration
@@ -133,6 +134,12 @@ Playwright screenshot
 backoff (`fetchWithRetry`, 600ms base, jitter, up to 4 retries), honoring `Retry-After`. This
 absorbs rate-limit-prone endpoints like the former scnet route.
 
+**Extract retry + prompt-injection fencing**: `browser_extract` validates against the caller JSON Schema
+and retries ≤2 times on a parse/schema failure, surfacing the concrete violation list so the model can
+self-correct. The vision instruction is framed with `<task>…</task>` and the system message marks the
+screenshot as untrusted page content — an instruction appearing *inside* the page is treated as data,
+never as a directive (defends against prompt injection).
+
 **Why default `quality=80` / `maxDimension=1024×768`?**
 - The vision model pre-processes to 800×800; 1024×768 is slightly above it, balancing "readable + not wasteful"
 - JPEG q=80 balances clarity and size; single image ≈100-300KB, won't bloat context
@@ -147,7 +154,9 @@ absorbs rate-limit-prone endpoints like the former scnet route.
 npm install            # install dependencies (postinstall prints browser guidance)
 npm run build          # tsc → lib/types/
 npm run check          # CI gate: build+smoke+verify:manifest+verify:i18n+router:check
-npm run smoke          # headless smoke (entry + capability + preprocess + tool defs)
+npm run smoke          # headless smoke (entry + capability + preprocess + tool defs, 9 tools)
+npm run test:logic     # pure-logic tests: extract retry + prompt-injection fencing (no browser/key)
+npm run test:integration # live browser integration (needs DSH_TUI_BROWSER_EXECUTABLE)
 npm run verify:manifest # @dsh-std/manifest validates dsh-plugin.json
 npm run verify:i18n     # bilingual dictionary completeness / placeholder parity
 # Vision full-chain / real external site (needs DSH_TUI_BROWSER_EXECUTABLE + key/proxy):
