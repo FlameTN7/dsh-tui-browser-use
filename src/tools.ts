@@ -23,7 +23,7 @@ import type {
   HoverParams, HoverResult, CookiesParams, CookiesResult,
   ConsoleMessagesParams, ConsoleMessagesResult, NetworkRequestsParams, NetworkRequestsResult,
   PdfParams, PdfResult,
-  ResultEnvelope, Usage, ErrorCode, BrowserUseConfig, PreparedImage,
+  ResultEnvelope, Usage, ErrorCode, PreparedImage,
 } from './types.js'
 import { t } from './i18n.js'
 import { prepareScreenshot } from './image-pipeline.js'
@@ -82,7 +82,7 @@ function fail(err: unknown): ResultEnvelope<never> {
 }
 
 /** Render a snapshot of the value as compact text content for the model. */
-function renderText(args: unknown, value: unknown): Array<Record<string, unknown>> {
+function renderText(_args: unknown, value: unknown): Array<Record<string, unknown>> {
   let text: string
   if (value && typeof value === 'object' && 'ok' in value) {
     const v = value as { ok: boolean; value?: unknown; error?: { message?: string } }

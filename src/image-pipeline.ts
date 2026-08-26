@@ -1,21 +1,18 @@
 /**
  * dsh-tui-browser-use — screenshot preprocessing pipeline.
  *
- * Proposal §5.3: compress → downsample → tiling. Round 1 implements the
- * catalog + metadata path: Playwright already returns the screenshot at the
- * requested format/quality and viewport size, so this module's immediate job
- * is to carry the prepared buffer forward with correct mime/dimensions and
- * to detect when tiling or downsampling would be required.
+ * Proposal §5.3: compress → downsample → tiling. This module carries the
+ * prepared buffer forward with correct mime/dimensions. Actual pixel-level
+ * tiling/cropping is a codec concern (no encoder is wired, so it is not done
+ * here); tall pages are split at the page level by `BrowserSession.captureSegments`
+ * (scroll-capture) before a single image ever reaches this pass-through.
  *
- * Actual pixel-level tiling/cropping lands in a later round (see the plan);
- * until then a single prepared image is returned. The function never throws
- * on an unrecognized image — it degrades to a pass-through with unknown
- * dimensions rather than failing a tool call.
+ * The function never throws on an unrecognized image — it degrades to a
+ * pass-through with unknown dimensions rather than failing a tool call.
  */
 
 import type { PreparedImage } from './types.js'
 import type { ScreenshotConfig, TilingConfig } from './types.js'
-import { buildTilingPlan } from './tiling.js'
 
 /** Output options for {@link prepareScreenshot}. */
 export interface PrepareScreenshotOptions {
@@ -30,8 +27,6 @@ export interface PrepareScreenshotOptions {
   /** Tile overlap in pixels, when `tiling` is `auto`/`on`. */
   overlap?: number
 }
-
-const BYTE = 256
 
 /** Cheap width/height header sniff for PNG (IHDR) and JPEG (SOFn). */
 export function parseImageDimensions(buf: Buffer): { width: number; height: number } {
@@ -86,32 +81,16 @@ export function sniffMime(buf: Buffer): string {
  */
 export function prepareScreenshot(
   input: Buffer,
-  options: PrepareScreenshotOptions,
+  _options: PrepareScreenshotOptions,
 ): PreparedImage[] {
   const mime = sniffMime(input)
   const { width, height } = parseImageDimensions(input)
-
-  // Compute the tiling geometry. Pixel cropping is a codec concern (deferred);
-  // the plan records whether the image would be split and how many tiles.
-  const plan = buildTilingPlan({
-    width,
-    height,
-    mode: options.tiling,
-    thresholdWidth: options.thresholdWidth ?? 1200,
-    thresholdHeight: options.thresholdHeight ?? 1200,
-    overlap: options.overlap ?? 0,
-  })
 
   const prepared: PreparedImage = {
     mime,
     data: input,
     width,
     height,
-  }
-  if (plan.needsTiling && plan.tiles.length > 0) {
-    // The image exceeds the cap: carry the tile plan so a consuming vision
-    // call can crop (when a codec is present) and mark the first block.
-    prepared.tile = { index: plan.tiles[0]!.index, total: plan.tiles[0]!.total }
   }
   return [prepared]
 }

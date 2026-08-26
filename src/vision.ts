@@ -120,7 +120,7 @@ function retryAfterMs(resp: Response): number | null {
 }
 
 /** Exponential backoff with jitter for one HTTP attempt. Returns false to stop. */
-function backoffDelayMs(attempt: number, baseDelayMs: number, maxRetries: number): number {
+function backoffDelayMs(attempt: number, baseDelayMs: number): number {
   // attempt is 0-based for the failed request. Delay grows 600, 1200, 2400, ...
   const exp = Math.min(attempt, 8)
   const jitter = 0.5 + Math.random() * 0.5 // 0.5..1.0 multiplier
@@ -141,14 +141,14 @@ async function fetchWithRetry(url: string, init: RequestInit, maxRetries = DEFAU
       resp = await fetch(url, init)
     } catch (err) {
       if (attempt >= maxRetries) throw err
-      await new Promise((r) => setTimeout(r, backoffDelayMs(attempt, DEFAULT_BASE_DELAY_MS, maxRetries)))
+      await new Promise((r) => setTimeout(r, backoffDelayMs(attempt, DEFAULT_BASE_DELAY_MS)))
       attempt += 1
       continue
     }
     if (resp.ok || !RETRYABLE_STATUS.has(resp.status) || attempt >= maxRetries) {
       return resp
     }
-    const delay = retryAfterMs(resp) ?? backoffDelayMs(attempt, DEFAULT_BASE_DELAY_MS, maxRetries)
+    const delay = retryAfterMs(resp) ?? backoffDelayMs(attempt, DEFAULT_BASE_DELAY_MS)
     await new Promise((r) => setTimeout(r, delay))
     attempt += 1
   }

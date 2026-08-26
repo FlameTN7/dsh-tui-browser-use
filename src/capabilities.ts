@@ -41,7 +41,7 @@ const VISION_MODEL_IDS = new Set(['mimo-v2.5', 'mimo-v2', 'deepseek-vl'])
  * to DOM fallback instead of sending it a screenshot it cannot read.
  * Explicit ids win, then the name fallback (`vision|vl|visual`).
  */
-export function isVisionCapableModel(provider: string, model: string): boolean {
+export function isVisionCapableModel(_provider: string, model: string): boolean {
   const modelName = (model || '').trim()
   if (VISION_MODEL_IDS.has(modelName)) return true
   return /vision|vl|visual/i.test(modelName)
