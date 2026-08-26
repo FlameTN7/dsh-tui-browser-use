@@ -89,7 +89,7 @@ async function main() {
   const defs = tools.buildToolDefinitions({} as never)
   assert.ok(Array.isArray(defs), 'buildToolDefinitions returns array')
   const names = defs.map((d) => d.name)
-  for (const expected of ['browser_navigate', 'browser_screenshot', 'browser_click', 'browser_type', 'browser_evaluate', 'browser_extract', 'browser_task', 'browser_status']) {
+  for (const expected of ['browser_navigate', 'browser_screenshot', 'browser_click', 'browser_type', 'browser_evaluate', 'browser_extract', 'browser_task', 'browser_status', 'browser_snapshot']) {
     assert.ok(names.includes(expected), `tool ${expected} present`)
   }
   for (const d of defs) {

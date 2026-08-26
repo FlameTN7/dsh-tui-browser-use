@@ -205,6 +205,46 @@ export interface StatusResult {
   config: BrowserUseConfig
 }
 
+/** One interactive/semantic element in the a11y snapshot index. */
+export interface SnapshotNode {
+  /** Stable 1-based index the agent can reference. */
+  index: number
+  /** Computed ARIA role (link/button/heading/checkbox/textbox/...). */
+  role: string
+  /** Accessible name (aria-label, label text, innerText, placeholder, ...). */
+  name: string
+  /** Lowercased tag name, e.g. `a`, `input`. */
+  tag: string
+  /** Input `type` (for `input` elements). */
+  type?: string
+  disabled: boolean
+  /** Checked state for checkbox/radio/switch. */
+  checked?: boolean
+  /** `placeholder` for form controls. */
+  placeholder?: string
+  /** `href` for links. */
+  href?: string
+  /** Top-left viewport x. */
+  x: number
+  /** Top-left viewport y. */
+  y: number
+  /** Element width. */
+  width: number
+  /** Element height. */
+  height: number
+}
+
+/** `browser.snapshot` parameters. */
+export interface SnapshotParams {
+  /** Max nodes to return (default 200, capped at 500). */
+  maxNodes?: number
+}
+
+/** `browser.snapshot` result. */
+export interface SnapshotResult {
+  nodes: SnapshotNode[]
+}
+
 // ── Vision pipeline shared types ─────────────────────────────────────────
 
 /** A prepared image ready to be sent to a vision model. */

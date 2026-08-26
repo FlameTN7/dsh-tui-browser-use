@@ -105,6 +105,24 @@ async function main() {
   assert.match(summary, /点我/, 'summary lists the button')
   assert.match(summary, /姓名/, 'summary lists the input placeholder')
 
+  // snapshot: returns a structured a11y element index (role/name/bbox)
+  const snap = await session.snapshot({})
+  console.log('[integ] snapshot nodes=' + snap.nodes.length + ' roles=' + snap.nodes.map((n) => n.role).join(','))
+  assert.ok(Array.isArray(snap.nodes) && snap.nodes.length >= 3, 'snapshot has >=3 nodes')
+  const hasHeading = snap.nodes.some((n) => n.role === 'heading' && /集成测试/.test(n.name))
+  const hasLink = snap.nodes.some((n) => n.role === 'link' && /跳到 B 区/.test(n.name))
+  const hasButton = snap.nodes.some((n) => n.role === 'button' && /点我/.test(n.name))
+  const hasTextbox = snap.nodes.some((n) => n.role === 'text' && /姓名/.test(n.name))
+  assert.ok(hasHeading, 'snapshot lists heading by role+name')
+  assert.ok(hasLink, 'snapshot lists link by role+name')
+  assert.ok(hasButton, 'snapshot lists button by role+name')
+  assert.ok(hasTextbox, 'snapshot lists textbox by role+name')
+  for (const n of snap.nodes) {
+    assert.ok(n.index > 0, 'index > 0')
+    assert.ok(Number.isFinite(n.x) && Number.isFinite(n.y), 'has bounding box x/y')
+    assert.ok(Number.isFinite(n.width) && Number.isFinite(n.height), 'has bounding box w/h')
+  }
+
   // status after start: available true, version present
   const status = await session.status()
   console.log('[integ] status:', JSON.stringify({ available: status.available, version: status.version }))

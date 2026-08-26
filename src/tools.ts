@@ -18,6 +18,7 @@ import type {
   NavigateParams, ClickParams, TypeParams, EvaluateParams, ScreenshotParams,
   NavigateResult, ClickResult, TypeResult, EvaluateResult, ScreenshotResult, StatusResult,
   ExtractParams, ExtractResult, TaskParams, TaskResult,
+  SnapshotParams, SnapshotResult,
   ResultEnvelope, Usage, ErrorCode, BrowserUseConfig, PreparedImage,
 } from './types.js'
 import { t } from './i18n.js'
@@ -413,6 +414,23 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       async execute(): Promise<ResultEnvelope<StatusResult>> {
         try {
           return ok(await session.status())
+        } catch (err) { return fail(err) }
+      },
+    },
+
+    {
+      name: 'browser_snapshot',
+      description: 'Return a structured accessibility snapshot of the current page — an indexed list of interactive/semantic elements (role, accessible name, tag, disabled, bounding box). This is the default way to observe a page and reason about what to click/type without needing a screenshot.',
+      parameters: objSchema({
+        maxNodes: { type: 'integer', description: 'Maximum nodes to return (default 200, capped at 500).' },
+      }),
+      output: { schema: envelopeSchema(), render: renderText },
+      timeoutMs: 15_000,
+      isConcurrencySafe: () => false,
+      async execute(args: unknown): Promise<ResultEnvelope<SnapshotResult>> {
+        const p = (args ?? {}) as SnapshotParams
+        try {
+          return ok(await session.snapshot(p))
         } catch (err) { return fail(err) }
       },
     },

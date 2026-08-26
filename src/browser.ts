@@ -13,7 +13,7 @@
  */
 
 import { existsSync, openSync, readSync, closeSync, statSync } from 'node:fs'
-import type { ErrorCode, NavigateParams, NavigateResult, ClickParams, ClickResult, TypeParams, TypeResult, EvaluateParams, EvaluateResult, ScreenshotParams, ScreenshotResult, StatusResult, I18nTemplate, BrowserUseConfig } from './types.js'
+import type { ErrorCode, NavigateParams, NavigateResult, ClickParams, ClickResult, TypeParams, TypeResult, EvaluateParams, EvaluateResult, ScreenshotParams, ScreenshotResult, StatusResult, SnapshotParams, SnapshotNode, SnapshotResult, I18nTemplate, BrowserUseConfig } from './types.js'
 import { t } from './i18n.js'
 
 // ── Structural Playwright types (no hard dependency) ─────────────────────
@@ -511,6 +511,101 @@ export class BrowserSession {
     await page.evaluate('window.scrollTo(0, 0)').catch(() => undefined)
     if (buffers.length === 0) buffers.push(await page.screenshot({ type, quality }))
     return buffers
+  }
+
+  /**
+   * Return a structured accessibility snapshot of the current page — an indexed
+   * list of interactive/semantic elements (role, accessible name, tag, disabled,
+   * bounding box). This is the agent's default observation: it can reason about
+   * what is clickable/typeable without a screenshot, and vision stays the
+   * fallback for genuinely visual content (canvas, charts, images).
+   *
+   * Computed fully in the page context via DOM walking (no Playwright a11y
+   * snapshot API dependency, which was removed upstream), so it works across
+   * engines and keeps the plugin's structural typing. Node count is capped so a
+   * huge page never bloats the model context.
+   */
+  async snapshot(params: SnapshotParams): Promise<SnapshotResult> {
+    if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
+    const page = this.requirePage()
+    const maxNodes = Math.min(Math.max(Number(params.maxNodes) || 200, 1), 500)
+    try {
+      const nodes = (await page.evaluate<unknown[]>(
+        `(() => {
+          const MAX = ${maxNodes};
+          const accName = (el) => {
+            // aria-labelledby references one or more element ids whose text is the name.
+            const labelledby = el.getAttribute('aria-labelledby');
+            if (labelledby) {
+              const names = labelledby.split(/\\s+/).map((id) => (document.getElementById(id) || {}).textContent || '').filter(Boolean);
+              if (names.length) return names.join(' ').trim();
+            }
+            const aria = el.getAttribute('aria-label');
+            if (aria && aria.trim()) return aria.trim();
+            const alt = el.getAttribute('alt');
+            if (alt && alt.trim()) return alt.trim();
+            // Label element for form controls.
+            if (el.matches('input, textarea, select')) {
+              const id = el.id;
+              if (id) {
+                const lbl = document.querySelector('label[for="' + id + '"]');
+                if (lbl && lbl.textContent.trim()) return lbl.textContent.trim();
+              }
+            }
+            const text = (el.innerText || el.textContent || '').trim();
+            if (text) return text.slice(0, 160);
+            const ph = el.getAttribute('placeholder') || el.getAttribute('name') || el.getAttribute('value') || el.getAttribute('title');
+            if (ph && ph.trim()) return ph.trim().slice(0, 160);
+            return '';
+          };
+          const selector = [
+            'a[href]', 'button', '[role=button]', '[role=link]', '[role=menuitem]',
+            '[role=tab]', '[role=checkbox]', '[role=radio]', '[role=switch]',
+            '[role=textbox]', '[role=combobox]', '[role=slider]',
+            'input:not([type=hidden])', 'textarea', 'select', '[contenteditable=true]',
+            'h1', 'h2', 'h3', 'h4', 'h5', 'h6', '[aria-label]', '[aria-labelledby]',
+          ].join(',');
+          const seen = new Set();
+          const nodes = [];
+          const all = document.querySelectorAll(selector);
+          for (const el of all) {
+            if (nodes.length >= MAX) break;
+            const rect = el.getBoundingClientRect();
+            if (rect.width === 0 && rect.height === 0) continue;
+            const tag = el.tagName.toLowerCase();
+            const role = el.getAttribute('role') ||
+              (tag === 'a' && el.hasAttribute('href') ? 'link' :
+               tag === 'button' ? 'button' :
+               tag === 'textarea' ? 'textbox' :
+               tag === 'select' ? 'combobox' :
+               tag === 'h1' || tag === 'h2' || tag === 'h3' || tag === 'h4' || tag === 'h5' || tag === 'h6' ? 'heading' :
+               tag === 'input' ? (el.getAttribute('type') || 'text') : tag);
+            const name = accName(el);
+            const key = tag + '|' + role + '|' + name + '|' + Math.round(rect.x) + '|' + Math.round(rect.y);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const node = {
+              index: nodes.length + 1,
+              role, name: name.slice(0, 160), tag,
+              disabled: el.disabled === true || el.getAttribute('aria-disabled') === 'true',
+              x: Math.round(rect.x), y: Math.round(rect.y),
+              width: Math.round(rect.width), height: Math.round(rect.height),
+            };
+            const type = el.getAttribute('type');
+            if (type) node.type = type;
+            if (el.hasAttribute('placeholder')) node.placeholder = el.getAttribute('placeholder');
+            if (el.hasAttribute('href')) node.href = el.getAttribute('href');
+            if (el.checked !== undefined) node.checked = el.checked === true;
+            nodes.push(node);
+          }
+          return nodes;
+        })()`,
+      )) ?? []
+      return { nodes: nodes as SnapshotNode[] }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
+    }
   }
 
   /** Gather a best-effort summary of visible interactive elements. */
