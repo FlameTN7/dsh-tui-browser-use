@@ -182,6 +182,25 @@ async function main() {
   const press = await session.press({ key: 'Enter' })
   assert.equal(press.success, true, 'press returns success')
 
+  // mutex (P1 #9): two serialized tasks must never interleave — task B waits
+  // for task A to fully settle, even though B was launched concurrently. This is
+  // the primitive the tool registry funnels every browser call through.
+  const runOrder: string[] = []
+  await Promise.all([
+    session.run(async () => {
+      runOrder.push('a-start')
+      await new Promise((r) => setTimeout(r, 30))
+      runOrder.push('a-end')
+    }),
+    session.run(async () => {
+      runOrder.push('b-start')
+      await new Promise((r) => setTimeout(r, 10))
+      runOrder.push('b-end')
+    }),
+  ])
+  console.log('[integ] mutex order:', JSON.stringify(runOrder))
+  assert.deepEqual(runOrder, ['a-start', 'a-end', 'b-start', 'b-end'], 'session.run serializes concurrent tasks')
+
   await session.close()
   console.log(`[integ] browser-use integration OK: ${executable || '(playwright/chrome auto)'} → ${status.version}`)
 }

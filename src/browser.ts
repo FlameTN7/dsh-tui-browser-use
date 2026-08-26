@@ -258,6 +258,13 @@ function dimensionPair(dim: string): { width: number; height: number } {
   return { width: Number.isFinite(w) ? w : 1280, height: Number.isFinite(h) ? h : 720 }
 }
 
+/** Numeric env override helper: returns the parsed value or the fallback. */
+function envNum(name: string, fallback: number): number {
+  const v = process.env[name]
+  const n = v ? Number.parseFloat(v) : NaN
+  return Number.isFinite(n) && n >= 0 ? n : fallback
+}
+
 /** The long-lived browser session shared across tool calls. */
 export class BrowserSession {
   private engine: PwBrowser | null = null
@@ -268,9 +275,38 @@ export class BrowserSession {
   // We don't hard-require a config at construction; the plugin injects it.
   config: BrowserUseConfig
 
+  // ── Serial mutex (P1 #9) ───────────────────────────────────────────────
+  // Single shared browser page → tool calls MUST never interleave Playwright
+  // operations (e.g. a click racing a screenshot). Every public tool method is
+  // funnelled through `run()`, which chains each task onto the previous so the
+  // session is a strict serial queue.
+  private chain: Promise<unknown> = Promise.resolve()
+
+  // ── Parameterized timeouts (P1 #9), env-overridable ────────────────────
+  private readonly navTimeoutMs: number
+  private readonly actionTimeoutMs: number
+  private readonly settleTimeoutMs: number
+
   constructor(config: BrowserUseConfig, lang: 'zh' | 'en') {
     this.config = config
     this.lang = lang
+    this.navTimeoutMs = envNum('DSH_TUI_BROWSER_TIMEOUT_NAVIGATION', 45_000)
+    this.actionTimeoutMs = envNum('DSH_TUI_BROWSER_TIMEOUT_ACTION', 12_000)
+    this.settleTimeoutMs = envNum('DSH_TUI_BROWSER_TIMEOUT_SETTLE', 6_000)
+  }
+
+  /**
+   * Serialize a task onto the session queue: each caller waits for the previous
+   * task to settle. The internal chain never rejects, so a failed task does not
+   * wedge the queue; the task's own rejection is still surfaced to its caller.
+   * Exposed publicly so the tool registry can funnel every tool call through the
+   * same single-browser-page lock (P1 #9): concurrent tool calls become a strict
+   * serial queue instead of interleaving Playwright operations.
+   */
+  run<T>(task: () => Promise<T>): Promise<T> {
+    const result = this.chain.then(() => task())
+    this.chain = result.then(() => undefined, () => undefined)
+    return result
   }
 
   /** Load the playwright module safely; returns null if it isn't installed. */
@@ -396,7 +432,7 @@ export class BrowserSession {
       // delayed far past a sane timeout. DOM-ready is enough to read the title
       // and interact; the follow-up `waitForLoadState('load')` is best-effort and
       // never blocks a successful navigate.
-      const resp = await page.goto(params.url, { waitUntil: 'domcontentloaded', timeout: 45_000 })
+      const resp = await page.goto(params.url, { waitUntil: 'domcontentloaded', timeout: this.navTimeoutMs })
       await page.waitForLoadState('load').catch(() => undefined)
       // Let the layout settle a beat rather than racing a still-parsing document.
       await page.evaluate('new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))').catch(() => undefined)
@@ -420,7 +456,7 @@ export class BrowserSession {
       // using the CSS path. Searches main frame then child frames (iframe).
       // Wait for the target to be actionable (SPA/lazy).
       const locator = await resolveFrameAware(page, params.selector, params.text)
-      await waitForLocator(locator)
+      await waitForLocator(locator, this.actionTimeoutMs)
       await locator.first().click()
       await page.waitForLoadState('load').catch(() => undefined)
       return { success: true, newUrl: page.url() || before }
@@ -438,7 +474,7 @@ export class BrowserSession {
       // frame then child frames, and wait for the input before filling so a SPA
       // that mounts its form late doesn't miss.
       const locator = await resolveFrameAware(page, params.selector, undefined)
-      await waitForLocator(locator)
+      await waitForLocator(locator, this.actionTimeoutMs)
       const field = locator.first()
       if (params.clear) await field.clear().catch(() => undefined)
       await field.fill(params.text)
@@ -467,7 +503,7 @@ export class BrowserSession {
     const page = this.requirePage()
     try {
       const before = page.url()
-      const resp = await page.goBack({ waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => null)
+      const resp = await page.goBack({ waitUntil: 'domcontentloaded', timeout: this.navTimeoutMs }).catch(() => null)
       return await this.navSettle(resp, before)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -480,7 +516,7 @@ export class BrowserSession {
     const page = this.requirePage()
     try {
       const before = page.url()
-      const resp = await page.goForward({ waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => null)
+      const resp = await page.goForward({ waitUntil: 'domcontentloaded', timeout: this.navTimeoutMs }).catch(() => null)
       return await this.navSettle(resp, before)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -493,7 +529,7 @@ export class BrowserSession {
     const page = this.requirePage()
     try {
       const before = page.url()
-      const resp = await page.reload({ waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => null)
+      const resp = await page.reload({ waitUntil: 'domcontentloaded', timeout: this.navTimeoutMs }).catch(() => null)
       return await this.navSettle(resp, before)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -536,7 +572,7 @@ export class BrowserSession {
     try {
       if (params.selector) {
         const locator = await resolveFrameAware(page, params.selector, undefined)
-        await waitForLocator(locator, params.timeoutMs ?? 6000)
+        await waitForLocator(locator, params.timeoutMs ?? this.settleTimeoutMs)
         return { waited: true, visible: true }
       }
       const ms = Math.max(0, Math.min(Number(params.ms) || 0, 30_000))

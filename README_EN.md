@@ -117,6 +117,9 @@ multi-modal routes. Production does **not** read `llm-pi-ai.providers` from harn
 | `DSH_TUI_BROWSER_EXECUTABLE` | Point at a Chromium binary (constrained containers) |
 | `DSH_TUI_BROWSER_ENGINE` | Browser engine: `chromium` (default) / `firefox` / `webkit` |
 | `DSH_TUI_BROWSER_PROXY` | HTTP proxy for the browser, e.g. `http://127.0.0.1:10800` (required for most external sites from the container) |
+| `DSH_TUI_BROWSER_TIMEOUT_NAVIGATION` | Navigation timeout ms (default 45000: `goto`/`back`/`forward`/`reload`) |
+| `DSH_TUI_BROWSER_TIMEOUT_ACTION` | Action timeout ms (default 12000: `click`/`type` waiting for an element) |
+| `DSH_TUI_BROWSER_TIMEOUT_SETTLE` | Settle timeout ms (default 6000: `wait` selector) |
 
 ## Vision pipeline
 

@@ -112,6 +112,9 @@ harness settings 的 `llm-pi-ai.providers`**（实测该 namespace 未注册到 
 | `DSH_TUI_BROWSER_EXECUTABLE` | 指定 Chromium 二进制（受限容器用） |
 | `DSH_TUI_BROWSER_ENGINE` | 选择浏览器引擎：`chromium`（默认）/ `firefox` / `webkit` |
 | `DSH_TUI_BROWSER_PROXY` | 给浏览器接 HTTP 代理，如 `http://127.0.0.1:10800`（容器访问多数外网站点必需） |
+| `DSH_TUI_BROWSER_TIMEOUT_NAVIGATION` | 导航超时 ms（默认 45000，`goto/back/forward/reload`） |
+| `DSH_TUI_BROWSER_TIMEOUT_ACTION` | 交互超时 ms（默认 12000，`click/type` 等待元素可交互） |
+| `DSH_TUI_BROWSER_TIMEOUT_SETTLE` | 等待/收敛超时 ms（默认 6000，`wait` 的 selector 等待） |
 
 ## 视觉管线
 
