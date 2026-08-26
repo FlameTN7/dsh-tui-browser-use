@@ -835,7 +835,7 @@ export class BrowserSession {
     // Scroll-capture tiling: step by (viewport height - overlap).
     const step = Math.max(1, dim.height - overlap)
     const buffers: Buffer[] = []
-    const maxTiles = 12
+    const maxTiles = envNum('DSH_TUI_BROWSER_MAX_TILES', 12)
     for (let y = 0; y < pageHeight && buffers.length < maxTiles; y += step) {
       await page.evaluate(`window.scrollTo(0, ${y})`).catch(() => undefined)
       // Wait two animation frames so the segment is painted before capture.
