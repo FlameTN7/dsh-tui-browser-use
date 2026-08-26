@@ -13,7 +13,7 @@
  */
 
 import { existsSync, openSync, readSync, closeSync, statSync } from 'node:fs'
-import type { ErrorCode, NavigateParams, NavigateResult, ClickParams, ClickResult, TypeParams, TypeResult, EvaluateParams, EvaluateResult, ScreenshotParams, ScreenshotResult, StatusResult, SnapshotParams, SnapshotNode, SnapshotResult, NavigationResult, ScrollParams, ScrollResult, PressParams, PressResult, WaitParams, WaitResult, I18nTemplate, BrowserUseConfig } from './types.js'
+import type { ErrorCode, NavigateParams, NavigateResult, ClickParams, ClickResult, TypeParams, TypeResult, EvaluateParams, EvaluateResult, ScreenshotParams, ScreenshotResult, StatusResult, SnapshotParams, SnapshotNode, SnapshotResult, NavigationResult, ScrollParams, ScrollResult, PressParams, PressResult, WaitParams, WaitResult, HoverParams, HoverResult, CookiesParams, CookiesResult, ConsoleMessagesParams, ConsoleMessagesResult, NetworkRequestsParams, NetworkRequestsResult, I18nTemplate, BrowserUseConfig } from './types.js'
 import { t } from './i18n.js'
 
 // ── Structural Playwright types (no hard dependency) ─────────────────────
@@ -32,9 +32,40 @@ interface PwLocator {
   fill(text: string): Promise<void>
   type(text: string): Promise<void>
   clear(): Promise<void>
+  hover(): Promise<void>
   first(): PwLocator
   waitFor(opts?: { state?: 'visible' | 'hidden' | 'attached' | 'detached'; timeout?: number }): Promise<void>
   count(): Promise<number>
+}
+
+/** A browser console message (structural). */
+interface PwConsoleMessage {
+  type(): string
+  text(): string
+}
+
+/** A browser network request (structural). */
+interface PwRequest {
+  url(): string
+  method(): string
+}
+
+/** A browser network response (structural). */
+interface PwResponse {
+  url(): string
+  status(): number
+}
+
+/** A browser cookie (structural). */
+interface PwCookie {
+  name: string
+  value: string
+  domain: string
+  path: string
+  expires: number
+  httpOnly: boolean
+  secure: boolean
+  sameSite: string
 }
 
 /** A Playwright keyboard handle (structural). */
@@ -73,6 +104,9 @@ interface PwPage {
   reload(opts?: { waitUntil?: string; timeout?: number }): Promise<{ status(): number | null; url(): string } | null>
   keyboard: PwKeyboard
   on(event: 'dialog', handler: (dialog: PwDialog) => void): void
+  on(event: 'console', handler: (message: PwConsoleMessage) => void): void
+  on(event: 'request', handler: (request: PwRequest) => void): void
+  on(event: 'response', handler: (response: PwResponse) => void): void
 }
 
 /** A child frame, with the same locator query surface as the page. */
@@ -89,6 +123,9 @@ interface PwContext {
   newPage(): Promise<PwPage>
   storageState(opts?: { path?: string }): Promise<Record<string, unknown>>
   close(): Promise<void>
+  cookies(urls?: string[]): Promise<PwCookie[]>
+  addCookies(cookies: Array<{ name: string; value: string; url?: string; domain?: string; path?: string }>): Promise<void>
+  clearCookies(): Promise<void>
 }
 
 interface PwBrowser {
@@ -325,6 +362,14 @@ export class BrowserSession {
   private readonly storageStatePath: string | undefined
   private readonly dialog: 'accept' | 'dismiss' | 'ignore'
 
+  // ── Console / network capture (P1 #7) ───────────────────────────────────
+  // Ring buffers of recent console messages and network requests so the agent
+  // can inspect page errors / XHR without a full devtools trace. Capped so a
+  // chatty page never grows memory unbounded.
+  private consoleLog: string[] = []
+  private networkLog: string[] = []
+  private static readonly CAPTURE_CAP = 500
+
   constructor(config: BrowserUseConfig, lang: 'zh' | 'en') {
     this.config = config
     this.lang = lang
@@ -435,19 +480,15 @@ export class BrowserSession {
         }
       }
       const dim = dimensionPair(this.config.screenshot.maxDimension)
-      // Session-state persistence (P1 #8): when DSH_TUI_BROWSER_STORAGE_STATE
-      // is set, create an explicit context (preloaded from the snapshot if it
-      // already exists) so a login state can be saved back on close. Otherwise
-      // use the browser's default context.
-      if (this.storageStatePath) {
-        const ctx = await this.engine.newContext({
-          storageState: existsSync(this.storageStatePath) ? this.storageStatePath : undefined,
-        })
-        this.ctx = ctx
-        this.page = await ctx.newPage()
-      } else {
-        this.page = await this.engine.newPage()
-      }
+      // Session-state persistence (P1 #8): an explicit context is used when a
+      // storageState snapshot is configured (preloaded if it already exists) so
+      // a login state can be saved back on close. Every path keeps a context
+      // reference so cookies()/clearCookies() always have a target.
+      const ctx = await this.engine.newContext({
+        storageState: this.storageStatePath && existsSync(this.storageStatePath) ? this.storageStatePath : undefined,
+      })
+      this.ctx = ctx
+      this.page = await ctx.newPage()
       await this.page.setViewportSize({ width: dim.width, height: dim.height })
       // Dialog handling: by default dismiss alert/confirm/prompt so a blocking
       // dialog cannot hang an agent action. `DSH_TUI_BROWSER_DIALOG=accept` or
@@ -457,6 +498,17 @@ export class BrowserSession {
           void (this.dialog === 'accept' ? d.accept() : d.dismiss()).catch(() => undefined)
         })
       }
+      // Capture console + network for the browser_console_messages / browser_network_requests
+      // tools. Both are best-effort ring buffers; a debug-friendly page can be inspected
+      // without a devtools/DRP trace.
+      this.page.on('console', (m) => {
+        this.consoleLog.push(`[${m.type()}] ${m.text()}`)
+        if (this.consoleLog.length > BrowserSession.CAPTURE_CAP) this.consoleLog.shift()
+      })
+      this.page.on('response', (r) => {
+        this.networkLog.push(`${r.status()} ${r.url()}`)
+        if (this.networkLog.length > BrowserSession.CAPTURE_CAP) this.networkLog.shift()
+      })
       this.startError = null
       return true
     } catch (err) {
@@ -471,6 +523,11 @@ export class BrowserSession {
   private requirePage(): PwPage {
     if (!this.page) throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: 'browser not started' }))
     return this.page
+  }
+
+  private requireContext(): PwContext {
+    if (!this.ctx) throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: 'browser context not started' }))
+    return this.ctx
   }
 
   /** Release the browser and mark the session unstarted. */
@@ -648,6 +705,53 @@ export class BrowserSession {
       const msg = err instanceof Error ? err.message : String(err)
       throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
     }
+  }
+
+  async hover(params: HoverParams): Promise<HoverResult> {
+    if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
+    const page = this.requirePage()
+    try {
+      // `text` (visible text) wins over `selector`; search main frame then frames.
+      const locator = await resolveFrameAware(page, params.selector, params.text)
+      await waitForLocator(locator, this.actionTimeoutMs)
+      await locator.first().hover()
+      // Let any hover-triggered UI settle a beat.
+      await page.evaluate('new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))').catch(() => undefined)
+      return { success: true }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
+    }
+  }
+
+  async cookies(params: CookiesParams): Promise<CookiesResult> {
+    if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
+    const ctx = this.requireContext()
+    try {
+      if (params.clear) await ctx.clearCookies().catch(() => undefined)
+      if (params.cookies && params.cookies.length > 0) {
+        await ctx.addCookies(params.cookies).catch(() => undefined)
+      }
+      const cookies = await ctx.cookies()
+      return { cookies }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
+    }
+  }
+
+  async consoleMessages(params: ConsoleMessagesParams): Promise<ConsoleMessagesResult> {
+    if (!(await this.ensureStarted())) return { messages: [] }
+    const out = [...this.consoleLog]
+    if (params.clear !== false) this.consoleLog = []
+    return { messages: out }
+  }
+
+  async networkRequests(params: NetworkRequestsParams): Promise<NetworkRequestsResult> {
+    if (!(await this.ensureStarted())) return { requests: [] }
+    const out = [...this.networkLog]
+    if (params.clear !== false) this.networkLog = []
+    return { requests: out }
   }
 
   async evaluate(params: EvaluateParams): Promise<EvaluateResult> {

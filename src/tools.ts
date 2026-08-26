@@ -20,6 +20,8 @@ import type {
   ExtractParams, ExtractResult, TaskParams, TaskResult,
   SnapshotParams, SnapshotResult, NavigationResult,
   ScrollParams, ScrollResult, PressParams, PressResult, WaitParams, WaitResult,
+  HoverParams, HoverResult, CookiesParams, CookiesResult,
+  ConsoleMessagesParams, ConsoleMessagesResult, NetworkRequestsParams, NetworkRequestsResult,
   ResultEnvelope, Usage, ErrorCode, BrowserUseConfig, PreparedImage,
 } from './types.js'
 import { t } from './i18n.js'
@@ -530,6 +532,76 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         const p = (args ?? {}) as WaitParams
         try {
           return ok(await session.wait(p))
+        } catch (err) { return fail(err) }
+      },
+    },
+
+    {
+      name: 'browser_hover',
+      description: 'Hover over an element by CSS selector or visible text (reveals dropdowns / tooltips).',
+      parameters: objSchema({
+        selector: { type: 'string', description: 'CSS selector to hover.' },
+        text: { type: 'string', description: 'Visible text to locate and hover.' },
+      }),
+      output: { schema: envelopeSchema(), render: renderText },
+      timeoutMs: 15_000,
+      isConcurrencySafe: () => false,
+      async execute(args: unknown): Promise<ResultEnvelope<HoverResult>> {
+        const p = (args ?? {}) as HoverParams
+        try {
+          return ok(await session.hover(p))
+        } catch (err) { return fail(err) }
+      },
+    },
+
+    {
+      name: 'browser_cookies',
+      description: 'Read (and optionally clear / add) the browser cookies. Returns the cookie list.',
+      parameters: objSchema({
+        clear: { type: 'boolean', description: 'Clear all cookies first (default false).' },
+        cookies: { type: 'array', description: 'Cookies to add before returning, each { name, value, url?/domain?/path? }.' },
+      }),
+      output: { schema: envelopeSchema(), render: renderText },
+      timeoutMs: 10_000,
+      isConcurrencySafe: () => false,
+      async execute(args: unknown): Promise<ResultEnvelope<CookiesResult>> {
+        const p = (args ?? {}) as CookiesParams
+        try {
+          return ok(await session.cookies(p))
+        } catch (err) { return fail(err) }
+      },
+    },
+
+    {
+      name: 'browser_console_messages',
+      description: 'Return the console messages captured since the last call (or since the page loaded), with `clear` (default true). Useful for debugging JS errors on a page.',
+      parameters: objSchema({
+        clear: { type: 'boolean', description: 'Clear the buffer after returning (default true).' },
+      }),
+      output: { schema: envelopeSchema(), render: renderText },
+      timeoutMs: 5_000,
+      isConcurrencySafe: () => true,
+      async execute(args: unknown): Promise<ResultEnvelope<ConsoleMessagesResult>> {
+        const p = (args ?? {}) as ConsoleMessagesParams
+        try {
+          return ok(await session.consoleMessages(p))
+        } catch (err) { return fail(err) }
+      },
+    },
+
+    {
+      name: 'browser_network_requests',
+      description: 'Return the network requests/responses captured since the last call (or since the page loaded), with `clear` (default true). Each entry is "<status> <url>". Useful for diagnosing failed XHR/fetch.',
+      parameters: objSchema({
+        clear: { type: 'boolean', description: 'Clear the buffer after returning (default true).' },
+      }),
+      output: { schema: envelopeSchema(), render: renderText },
+      timeoutMs: 5_000,
+      isConcurrencySafe: () => true,
+      async execute(args: unknown): Promise<ResultEnvelope<NetworkRequestsResult>> {
+        const p = (args ?? {}) as NetworkRequestsParams
+        try {
+          return ok(await session.networkRequests(p))
         } catch (err) { return fail(err) }
       },
     },

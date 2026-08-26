@@ -215,6 +215,54 @@ export interface WaitResult {
   visible?: boolean
 }
 
+/** `browser.hover` parameters. */
+export interface HoverParams {
+  /** CSS selector. Mutually exclusive with `text`. */
+  selector?: string
+  /** Visible text to locate and hover. Mutually exclusive with `selector`. */
+  text?: string
+}
+
+/** `browser.hover` result. */
+export interface HoverResult {
+  success: boolean
+}
+
+/** `browser.cookies` parameters. */
+export interface CookiesParams {
+  /** Clear all cookies before returning (default false). */
+  clear?: boolean
+  /** Cookies to add before returning (set `name`/`value`, optional `url`/`domain`/`path`). */
+  cookies?: Array<{ name: string; value: string; url?: string; domain?: string; path?: string }>
+}
+
+/** `browser.cookies` result. */
+export interface CookiesResult {
+  cookies: Array<{ name: string; value: string; domain: string; path: string; expires: number; httpOnly: boolean; secure: boolean; sameSite: string }>
+}
+
+/** `browser.console_messages` parameters. */
+export interface ConsoleMessagesParams {
+  /** Clear the accumulated buffer after returning (default true). */
+  clear?: boolean
+}
+
+/** `browser.console_messages` result. */
+export interface ConsoleMessagesResult {
+  messages: string[]
+}
+
+/** `browser.network_requests` parameters. */
+export interface NetworkRequestsParams {
+  /** Clear the accumulated buffer after returning (default true). */
+  clear?: boolean
+}
+
+/** `browser.network_requests` result. */
+export interface NetworkRequestsResult {
+  requests: string[]
+}
+
 /** `browser.evaluate` parameters. */
 export interface EvaluateParams {
   expression: string

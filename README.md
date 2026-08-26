@@ -50,6 +50,10 @@
 | `browser_scroll` | 滚动 | 按像素偏移 `x`/`y`，返回实际滚动位置 |
 | `browser_press` | 按键 | `key` 如 Enter/Escape/Tab/Control+S |
 | `browser_wait` | 等待 | `selector` 可见或 `ms` 睡眠（上限 30000） |
+| `browser_hover` | 悬停 | `selector`/`text`，显示下拉/工具提示 |
+| `browser_cookies` | Cookie | 读取，可选 `clear` 或 `cookies` 写入 |
+| `browser_console_messages` | console 捕获 | `[type] text`，`clear`（默认 true） |
+| `browser_network_requests` | 网络捕获 | `<status> <url>`，`clear`（默认 true） |
 | `browser_status` | 浏览器状态 | 可用性/版本/配置 |
 
 ## 配置
@@ -158,7 +162,7 @@ Playwright 截图
 npm install            # 安装依赖（postinstall 打印浏览器就绪指引）
 npm run build          # tsc → lib/types/
 npm run check          # CI 门禁：build+smoke+verify:manifest+verify:i18n+router:check
-npm run smoke          # 无头冒烟（入口 + 能力判定 + 截图预处理 + 工具定义，15 工具）
+npm run smoke          # 无头冒烟（入口 + 能力判定 + 截图预处理 + 工具定义，19 工具）
 npm run test:logic     # 纯逻辑测试：extract 重试 + 提示注入护栏（无需浏览器/key）
 npm run test:integration # 真实浏览器集成（需 DSH_TUI_BROWSER_EXECUTABLE）
 npm run verify:manifest # @dsh-std/manifest 校验 dsh-plugin.json

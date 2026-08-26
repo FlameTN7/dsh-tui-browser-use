@@ -25,6 +25,10 @@ All tools live in the `browser_*` namespace and return a unified envelope
 | `browser_scroll` | Scroll by a pixel delta | `x?` / `y?` |
 | `browser_press` | Press a keyboard key | `key` |
 | `browser_wait` | Wait for a selector visible, or sleep | `selector?` / `ms?` |
+| `browser_hover` | Hover a selector or visible text | `selector?` / `text?` |
+| `browser_cookies` | Read / clear / add cookies | `clear?` / `cookies?` |
+| `browser_console_messages` | Capture console output | `clear?` |
+| `browser_network_requests` | Capture network requests | `clear?` |
 | `browser_status` | Check availability + config | — |
 
 ## Common workflow

@@ -52,6 +52,10 @@ A browser-use capability aligned with Claude Code, but natively adapted for the 
 | `browser_scroll` | Scroll | Pixel offset `x`/`y`, returns the resulting scroll position |
 | `browser_press` | Press a key | `key` like Enter/Escape/Tab/Control+S |
 | `browser_wait` | Wait | A `selector` becomes visible, or sleep `ms` (capped 30000) |
+| `browser_hover` | Hover | `selector`/`text`, reveals dropdowns/tooltips |
+| `browser_cookies` | Cookies | Read, optional `clear` or `cookies` to write |
+| `browser_console_messages` | Console capture | `[type] text`, `clear` (default true) |
+| `browser_network_requests` | Network capture | `<status> <url>`, `clear` (default true) |
 | `browser_status` | Browser status | Availability / version / configuration |
 
 ## Configuration
@@ -164,7 +168,7 @@ never as a directive (defends against prompt injection).
 npm install            # install dependencies (postinstall prints browser guidance)
 npm run build          # tsc → lib/types/
 npm run check          # CI gate: build+smoke+verify:manifest+verify:i18n+router:check
-npm run smoke          # headless smoke (entry + capability + preprocess + tool defs, 15 tools)
+npm run smoke          # headless smoke (entry + capability + preprocess + tool defs, 19 tools)
 npm run test:logic     # pure-logic tests: extract retry + prompt-injection fencing (no browser/key)
 npm run test:integration # live browser integration (needs DSH_TUI_BROWSER_EXECUTABLE)
 npm run verify:manifest # @dsh-std/manifest validates dsh-plugin.json
