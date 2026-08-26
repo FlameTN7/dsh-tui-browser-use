@@ -66,8 +66,33 @@ interface PwChromium {
   launch(opts: { channel?: string; executablePath?: string; headless?: boolean; args?: string[]; proxy?: { server: string } }): Promise<PwBrowser>
 }
 
+/** Common launch options shared by every Playwright browser engine. */
+type PwLaunchOptions = { channel?: string; executablePath?: string; headless?: boolean; args?: string[]; proxy?: { server: string } }
+
 interface PwModule {
   chromium: PwChromium
+  firefox?: { launch(opts: PwLaunchOptions): Promise<PwBrowser> }
+  webkit?: { launch(opts: PwLaunchOptions): Promise<PwBrowser> }
+}
+
+/**
+ * The browser engine to drive. Default `chromium`; `DSH_TUI_BROWSER_ENGINE`
+ * can select `firefox` or `webkit` for cross-engine coverage. Falls back to
+ * chromium if the selected engine isn't installed.
+ */
+function browserEngine(): 'chromium' | 'firefox' | 'webkit' {
+  const v = process.env.DSH_TUI_BROWSER_ENGINE
+  if (v === 'firefox' || v === 'webkit') return v
+  return 'chromium'
+}
+
+/**
+ * Launch args appropriate to the engine. Chromium-as-root in this container
+ * needs `--no-sandbox`/`--disable-dev-shm-usage`/`--disable-gpu`; Firefox/WebKit
+ * do not take chromium's GPU/sandbox flags, so pass an empty args array.
+ */
+function engineLaunchArgs(engine: 'chromium' | 'firefox' | 'webkit'): string[] {
+  return engine === 'chromium' ? CONTAINER_LAUNCH_ARGS : []
 }
 
 // Chromium runs as root in this container; headless launch needs these flags or
@@ -223,7 +248,8 @@ export class BrowserSession {
   /**
    * Ensure a browser and page exist, probing sources in order:
    * system Chrome (`channel:'chrome'`) → explicit binary (`executablePath`) →
-   * Playwright-bundled Chromium.
+   * Playwright-bundled Chromium. `DSH_TUI_BROWSER_ENGINE` selects `firefox`/
+   * `webkit` for cross-engine coverage; the chromium path stays the default.
    */
   async ensureStarted(): Promise<boolean> {
     if (this.engine !== null && this.page !== null) return true
@@ -234,23 +260,37 @@ export class BrowserSession {
     }
     try {
       const proxy = browserProxy()
-      // Probe system Chrome first (fewest install friction on most dev boxes).
-      try {
-        this.engine = await pw.chromium.launch({ channel: 'chrome', headless: true, args: CONTAINER_LAUNCH_ARGS, ...(proxy ? { proxy } : {}) })
-      } catch {
-        const executablePath = this.resolveExecutablePath()
-        if (executablePath) {
-          // Fall back to an explicit binary (container / unusual install); if
-          // it still fails (e.g. an imperfect binary), fall through to the
-          // Playwright-bundled Chromium rather than surfacing the error.
-          try {
-            this.engine = await pw.chromium.launch({ executablePath, headless: true, args: CONTAINER_LAUNCH_ARGS, ...(proxy ? { proxy } : {}) })
-          } catch {
+      const engine = browserEngine()
+      // Non-chromium engines (firefox/webkit): use the bundled binary, no
+      // channel/executable probe (they don't ship per-engine system channels).
+      if (engine !== 'chromium') {
+        const inject = pw[engine]
+        if (!inject) {
+          this.startError = t('error.browser-missing', this.lang) + ` (engine '${engine}' not installed)`
+          this.engine = null
+          this.page = null
+          return false
+        }
+        this.engine = await inject.launch({ headless: true, args: engineLaunchArgs(engine), ...(proxy ? { proxy } : {}) })
+      } else {
+        // Probe system Chrome first (fewest install friction on most dev boxes).
+        try {
+          this.engine = await pw.chromium.launch({ channel: 'chrome', headless: true, args: CONTAINER_LAUNCH_ARGS, ...(proxy ? { proxy } : {}) })
+        } catch {
+          const executablePath = this.resolveExecutablePath()
+          if (executablePath) {
+            // Fall back to an explicit binary (container / unusual install); if
+            // it still fails (e.g. an imperfect binary), fall through to the
+            // Playwright-bundled Chromium rather than surfacing the error.
+            try {
+              this.engine = await pw.chromium.launch({ executablePath, headless: true, args: CONTAINER_LAUNCH_ARGS, ...(proxy ? { proxy } : {}) })
+            } catch {
+              this.engine = await pw.chromium.launch({ headless: true, args: CONTAINER_LAUNCH_ARGS, ...(proxy ? { proxy } : {}) })
+            }
+          } else {
+            // Final fall back to the Playwright-bundled Chromium.
             this.engine = await pw.chromium.launch({ headless: true, args: CONTAINER_LAUNCH_ARGS, ...(proxy ? { proxy } : {}) })
           }
-        } else {
-          // Final fall back to the Playwright-bundled Chromium.
-          this.engine = await pw.chromium.launch({ headless: true, args: CONTAINER_LAUNCH_ARGS, ...(proxy ? { proxy } : {}) })
         }
       }
       const dim = dimensionPair(this.config.screenshot.maxDimension)

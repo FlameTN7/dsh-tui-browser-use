@@ -3,7 +3,7 @@
   "manifestVersion": "0.15",
   "id": "dsh-tui-browser-use",
   "name": "dsh-tui-browser-use",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "facets": {
     "host": {
       "entry": "lib/types/index.js",

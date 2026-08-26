@@ -105,6 +105,7 @@ harness settings 的 `llm-pi-ai.providers`**（实测该 namespace 未注册到 
 | `DSH_TUI_BROWSER_MODEL` | 覆盖默认模型 id |
 | `DSH_TUI_BROWSER_BASE_URL` | 覆盖 provider 端点 |
 | `DSH_TUI_BROWSER_EXECUTABLE` | 指定 Chromium 二进制（受限容器用） |
+| `DSH_TUI_BROWSER_ENGINE` | 选择浏览器引擎：`chromium`（默认）/ `firefox` / `webkit` |
 | `DSH_TUI_BROWSER_PROXY` | 给浏览器接 HTTP 代理，如 `http://127.0.0.1:10800`（容器访问多数外网站点必需） |
 
 ## 视觉管线
@@ -151,6 +152,7 @@ npm run test:vision-mimo   # xiaomi mimo-v2.5 base64
 npm run test:vision-router # provider 路由(经 apply())→ xiaomi
 npm run test:vision-textonly # 文本模型降级 DOM
 npm run test:dynamic       # SPA/懒加载/text+role 定位/waitFor/shadow
+npm run test:engine        # 跨浏览器引擎 (chromium/firefox/webkit)
 npm run test:real-task     # 真实外网 example.com 多步 browser_task
 npm run test:real-extract  # 真实外网 browser_extract schema 校验
 npm run test:real-interact # 真实外网 duckduckgo 走代理 type+click

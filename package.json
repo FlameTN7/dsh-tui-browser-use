@@ -1,6 +1,6 @@
 {
   "name": "dsh-tui-browser-use",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Browser automation toolset for dsh-tui agents: Playwright-driven browser control with deepseek-v4-flash-vision-exp visual understanding.",
   "license": "MIT",
   "type": "module",
@@ -38,6 +38,7 @@
     "test:vision-tiling": "node scripts/vision-tiling-check.mjs",
     "test:vision-mimo": "node scripts/vision-mimo-check.mjs",
     "test:dynamic": "node scripts/dynamic-page-check.mjs",
+    "test:engine": "node scripts/browser-engine-check.mjs",
     "test:real-task": "node scripts/real-task-check.mjs",
     "test:real-extract": "node scripts/real-extract-check.mjs",
     "test:real-interact": "node scripts/real-interact-check.mjs",

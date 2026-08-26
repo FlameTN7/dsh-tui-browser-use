@@ -110,6 +110,7 @@ multi-modal routes. Production does **not** read `llm-pi-ai.providers` from harn
 | `DSH_TUI_BROWSER_MODEL` | Override the default model id |
 | `DSH_TUI_BROWSER_BASE_URL` | Override the provider endpoint |
 | `DSH_TUI_BROWSER_EXECUTABLE` | Point at a Chromium binary (constrained containers) |
+| `DSH_TUI_BROWSER_ENGINE` | Browser engine: `chromium` (default) / `firefox` / `webkit` |
 | `DSH_TUI_BROWSER_PROXY` | HTTP proxy for the browser, e.g. `http://127.0.0.1:10800` (required for most external sites from the container) |
 
 ## Vision pipeline
@@ -155,6 +156,7 @@ npm run test:vision-mimo   # xiaomi mimo-v2.5 base64
 npm run test:vision-router # provider route (via apply()) → xiaomi
 npm run test:vision-textonly # text model degrades to DOM
 npm run test:dynamic       # SPA/lazy + text/role locator + waitFor + shadow
+npm run test:engine        # cross-engine (chromium/firefox/webkit)
 npm run test:real-task     # real external example.com multi-step browser_task
 npm run test:real-extract  # real external browser_extract schema validation
 npm run test:real-interact # real external duckduckgo via proxy type+click
