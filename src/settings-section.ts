@@ -63,7 +63,7 @@ export function registerSettingsSection(ctx: { get(name: string, optional?: bool
   // Build descriptions from the shared i18n dict (single source of truth).
   const d = (key: string) => dict[key]
 
-  return sections.register({
+  const section: SettingsSection = {
     ns: 'browser-use',
     title: 'Browser Automation (browser-use)',
     descriptions: { zh: d('settings.title')?.zh ?? '浏览器自动化 (browser-use)', en: d('settings.title')?.en ?? 'Browser Automation (browser-use)' },
@@ -71,7 +71,7 @@ export function registerSettingsSection(ctx: { get(name: string, optional?: bool
       {
         path: ['visionMode'],
         label: d('settings.visionMode.label')?.en ?? 'Vision mode',
-        descriptions: { zh: d('settings.visionMode.label')?.zh ?? '视觉模式', en: d('settings.visionMode.label')?.en ?? 'Vision mode' },
+        descriptions: { zh: d('settings.visionMode.description')?.zh ?? '视觉模式', en: d('settings.visionMode.description')?.en ?? 'Vision mode' },
         kind: 'select',
         options: [
           { value: 'auto', label: 'Auto', descriptions: { zh: '自动', en: 'Auto' } },
@@ -129,5 +129,9 @@ export function registerSettingsSection(ctx: { get(name: string, optional?: bool
         kind: 'number',
       },
     ],
-  })
+  }
+
+  const disposer = sections.register(section)
+  debug?.(`settings section registered: ns=${section.ns} fields=${section.fields.length} title="${section.title}"`)
+  return disposer
 }

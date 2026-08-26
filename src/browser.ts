@@ -26,6 +26,16 @@ interface PwElementHandle {
   isVisible(): Promise<boolean>
 }
 
+/** A Playwright locator handle (structural, minimal for click/fill/wait). */
+interface PwLocator {
+  click(): Promise<void>
+  fill(text: string): Promise<void>
+  type(text: string): Promise<void>
+  first(): PwLocator
+  waitFor(opts?: { state?: 'visible' | 'hidden' | 'attached' | 'detached'; timeout?: number }): Promise<void>
+  count(): Promise<number>
+}
+
 interface PwPage {
   goto(url: string, opts?: { waitUntil?: string; timeout?: number }): Promise<{ status(): number | null; url(): string } | null>
   title(): Promise<string>
@@ -37,7 +47,10 @@ interface PwPage {
   type(selector: string, text: string): Promise<void>
   evaluate<T>(fn: string | ((...args: unknown[]) => T), ...args: unknown[]): Promise<T>
   $(selector: string): Promise<PwElementHandle | null>
-  locator(selector: string): { getByText?(text: string): { first(): Promise<PwElementHandle> }; textContent?: (text: string) => unknown }
+  locator(selector: string): PwLocator
+  getByText(text: string): PwLocator
+  getByRole(role: string, opts?: { name?: string }): PwLocator
+  getByLabel(text: string): PwLocator
   waitForLoadState(state?: string): Promise<void>
   setViewportSize(size: { width: number; height: number }): Promise<void>
 }
@@ -69,6 +82,49 @@ const CONTAINER_LAUNCH_ARGS = ['--no-sandbox', '--disable-dev-shm-usage', '--dis
 function browserProxy(): { server: string } | undefined {
   const v = process.env.DSH_TUI_BROWSER_PROXY
   return v && v.length > 0 ? { server: v } : undefined
+}
+
+/**
+ * Wait for a dynamically-rendered target (SPA / lazy content) to be actionable
+ * before an interaction. Retries a few times because a click/type on an element
+ * that is attached but still animating can miss. Mirrors browser-use's
+ * `_wait_for_minimum_elements` + Playwright MCP's `--timeout-action`.
+ */
+async function waitForLocator(locator: PwLocator, timeoutMs = 6000): Promise<void> {
+  // `waitFor` starts from the current DOM; it does not re-query after a first
+  // failed attempt, so cap each try and retry a few times.
+  const perTry = Math.max(800, Math.min(3000, Math.round(timeoutMs / 3)))
+  for (let i = 0; i < 3; i += 1) {
+    try {
+      await locator.first().waitFor({ state: 'visible', timeout: perTry })
+      return
+    } catch { /* re-query next attempt */ }
+  }
+  // Final attempt surfaces the error (so the caller gets a useful message).
+  await locator.first().waitFor({ state: 'visible', timeout: perTry })
+}
+
+/**
+ * Resolve a locator from a caller-provided selector/text, honoring Playwright's
+ * richer query strategies in addition to CSS:
+ *   - `text=` / visible-text match (used by `browser_click({ text })`)
+ *   - `role=button[name=x]` / ARIA role match
+ *   - plain CSS selector (used by `browser_type({ selector })`)
+ * Prefers the semantically-stable text/role match over brittle CSS class chains
+ * (dynamic sites compile/hash their class names; accessible names do not).
+ */
+function resolveLocator(page: PwPage, selector?: string, text?: string): PwLocator {
+  if (text !== undefined && text.length > 0) {
+    return page.getByText(text)
+  }
+  if (selector && /^role=/.test(selector)) {
+    const m = /^role=([a-z]+)(?:\[name=(.+)\])?/i.exec(selector)
+    if (m?.[1]) return page.getByRole(m[1], m[2] !== undefined ? { name: m[2] } : undefined)
+  }
+  if (selector && /^label=/.test(selector)) {
+    return page.getByLabel(selector.slice('label='.length))
+  }
+  return page.locator(selector ?? '')
 }
 
 /**
@@ -256,13 +312,11 @@ export class BrowserSession {
     const page = this.requirePage()
     const before = page.url()
     try {
-      if (params.selector) {
-        await page.click(params.selector)
-      } else if (params.text) {
-        await page.click(`text=${params.text}`)
-      } else {
-        throw new BrowserToolError('browser-error', t('error.argument', this.lang, { message: 'selector or text required' }))
-      }
+      // `text` (visible text) wins over `selector` (CSS); a bare selector keeps
+      // using the CSS path. Wait for the target to be actionable (SPA/lazy).
+      const locator = resolveLocator(page, params.selector, params.text)
+      await waitForLocator(locator)
+      await locator.first().click()
       await page.waitForLoadState('load').catch(() => undefined)
       return { success: true, newUrl: page.url() || before }
     } catch (err) {
@@ -275,7 +329,10 @@ export class BrowserSession {
     if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
     const page = this.requirePage()
     try {
-      await page.fill(params.selector, params.text)
+      // `type` uses a CSS selector (the caller queries the field). Wait for the
+      // input before filling so a SPA that mounts its form late doesn't miss.
+      await waitForLocator(page.locator(params.selector))
+      await page.locator(params.selector).first().fill(params.text)
       return { success: true }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)

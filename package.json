@@ -37,6 +37,7 @@
     "test:vision-textonly": "node scripts/vision-textonly-check.mjs",
     "test:vision-tiling": "node scripts/vision-tiling-check.mjs",
     "test:vision-mimo": "node scripts/vision-mimo-check.mjs",
+    "test:dynamic": "node scripts/dynamic-page-check.mjs",
     "test:real-task": "node scripts/real-task-check.mjs",
     "test:real-extract": "node scripts/real-extract-check.mjs",
     "test:real-interact": "node scripts/real-interact-check.mjs",

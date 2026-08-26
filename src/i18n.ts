@@ -30,10 +30,6 @@ export const dict: I18nDict = {
     zh: 'auto 自动判定（官方 DeepSeek 走文件 API，其他走 base64）；on 强制开启；off 纯 DOM；deepseek-file-api 强制官方文件路径',
     en: 'auto detects (official DeepSeek uses the file API, others base64); on forces vision; off is pure DOM; deepseek-file-api forces the official file path',
   },
-  'settings.screenshot.label': {
-    zh: '截图参数',
-    en: 'Screenshot parameters',
-  },
   'settings.screenshot.format.label': {
     zh: '截图格式',
     en: 'Screenshot format',
@@ -45,10 +41,6 @@ export const dict: I18nDict = {
   'settings.screenshot.maxDimension.label': {
     zh: '最大尺寸 (宽x高)',
     en: 'Max dimension (widthxheight)',
-  },
-  'settings.tiling.label': {
-    zh: '大图切分',
-    en: 'Large-image tiling',
   },
   'settings.tiling.mode.label': {
     zh: '切分模式',
@@ -62,26 +54,8 @@ export const dict: I18nDict = {
     zh: '重叠像素',
     en: 'Overlap pixels',
   },
-  'settings.providers.label': {
-    zh: 'Provider 覆盖',
-    en: 'Provider overrides',
-  },
 
   // ── tool status ────────────────────────────────────────────────────────
-  'status.available': {
-    zh: '浏览器可用',
-    en: 'Browser available',
-  },
-  'status.unavailable': {
-    zh: '浏览器不可用',
-    en: 'Browser unavailable',
-  },
-  'status.version': {
-    zh: '引擎版本: {{version}}',
-    en: 'Engine version: {{version}}',
-  },
-
-  // ── tool errors ────────────────────────────────────────────────────────
   'error.browser': {
     zh: '浏览器操作失败: {{message}}',
     en: 'Browser operation failed: {{message}}',
@@ -94,21 +68,9 @@ export const dict: I18nDict = {
     zh: '视觉通路不可用: 当前 provider 不支持图片，或 visionMode 为 off。',
     en: 'Vision path unavailable: the current provider does not support images, or visionMode is off.',
   },
-  'error.provider-unsupported': {
-    zh: '当前 provider 无法处理图片请求。',
-    en: 'The current provider cannot handle image requests.',
-  },
   'error.schema-validation': {
     zh: '提取结果未通过调用方 schema 校验: {{message}}',
     en: 'Extracted data failed caller schema validation: {{message}}',
-  },
-  'error.timed-out': {
-    zh: '操作超时: {{message}}',
-    en: 'Operation timed out: {{message}}',
-  },
-  'error.not-implemented': {
-    zh: '工具暂未实现: {{name}}',
-    en: 'Tool not yet implemented: {{name}}',
   },
   'error.argument': {
     zh: '参数错误: {{message}}',

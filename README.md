@@ -150,6 +150,7 @@ npm run test:vision        # DeepSeek file_api 单图
 npm run test:vision-mimo   # xiaomi mimo-v2.5 base64
 npm run test:vision-router # provider 路由(经 apply())→ xiaomi
 npm run test:vision-textonly # 文本模型降级 DOM
+npm run test:dynamic       # SPA/懒加载/text+role 定位/waitFor/shadow
 npm run test:real-task     # 真实外网 example.com 多步 browser_task
 npm run test:real-extract  # 真实外网 browser_extract schema 校验
 npm run test:real-interact # 真实外网 duckduckgo 走代理 type+click

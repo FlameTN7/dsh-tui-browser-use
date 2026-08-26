@@ -154,6 +154,7 @@ npm run test:vision        # DeepSeek file_api single image
 npm run test:vision-mimo   # xiaomi mimo-v2.5 base64
 npm run test:vision-router # provider route (via apply()) → xiaomi
 npm run test:vision-textonly # text model degrades to DOM
+npm run test:dynamic       # SPA/lazy + text/role locator + waitFor + shadow
 npm run test:real-task     # real external example.com multi-step browser_task
 npm run test:real-extract  # real external browser_extract schema validation
 npm run test:real-interact # real external duckduckgo via proxy type+click
