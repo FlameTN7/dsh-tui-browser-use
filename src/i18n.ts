@@ -84,6 +84,10 @@ export const dict: I18nDict = {
     zh: '相邻分段的重叠像素数，避免接缝处元素被切断。',
     en: 'Overlap pixels between adjacent segments, so seam elements are not cut off.',
   },
+  'tiling.truncated.note': {
+    zh: '页面在第 {{captured}}/{{total}} 段后截断，还有 {{dropped}} 段未被采集，可见内容只到约 {{heightPx}}px 处，其下缺失。',
+    en: 'The page was truncated after segment {{captured}} of {{total}}; {{dropped}} more segment(s) were not captured, so content is only readable down to roughly {{heightPx}}px and everything below is missing.',
+  },
 
   // ── tool status ────────────────────────────────────────────────────────
   'error.browser': {

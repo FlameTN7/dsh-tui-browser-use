@@ -65,8 +65,9 @@ async function main() {
   log('navigating to tall fixture')
   await session.navigate({ url: 'file://' + fixture })
 
-  const segments = await session.captureSegments()
-  log('captureSegments returned ' + segments.length + ' segments: ' + segments.map((b) => b.length).join(','))
+  const cap = await session.captureSegments()
+  const segments = cap.buffers
+  log('captureSegments returned ' + segments.length + ' segments: ' + segments.map((b) => b.length).join(',') + (cap.truncated ? ` (TRUNCATED, planned ${cap.segmentsTotal})` : ''))
 
   // Prepare each segment (no further tiling) and label its tile index.
   const images = segments.map((buf, i) => {

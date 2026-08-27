@@ -169,6 +169,9 @@ never as a directive (defends against prompt injection).
 **Why `tiling=auto`?**
 - Small screenshots (≤1200×1200) are not split — saves tokens
 - Large screenshots (full-page / high-res) auto-split for detail. 4-6 tiles ≈ 2304 tokens ≈ $0.0005, negligible cost
+- **Wide pages also split**: columns step by `viewport-width − overlap` and rows by `viewport-height − overlap`, so a wide page is no longer clipped to the left viewport.
+- **Truncation reported**: when a page needs more tiles than `maxTiles` (default 12), `browser_screenshot` surfaces `tilesTotal`/`tilesCaptured`/`tilesTruncated` and injects a "content only read down to ~Y px, rest is missing" note into the vision instruction.
+- **sticky de-dup**: adjacent tiles overlap at the seam; the vision instruction says duplicated band is the same page region — never double-count it.
 
 ## Build & verify
 
@@ -179,6 +182,7 @@ npm run check          # CI gate: build+smoke+verify:manifest+verify:i18n+router
 npm run smoke          # headless smoke (entry + capability + preprocess + tool defs, 20 tools)
 npm run test:logic     # pure-logic tests: extract retry + prompt-injection fencing (no browser/key)
 npm run test:integration # live browser integration (needs DSH_TUI_BROWSER_EXECUTABLE)
+npm run test:tiling-defects # tiling 3-defect regression: wide split/truncation/control (needs DSH_TUI_BROWSER_EXECUTABLE)
 npm run verify:manifest # @dsh-std/manifest validates dsh-plugin.json
 npm run verify:i18n     # bilingual dictionary completeness / placeholder parity
 # Vision full-chain / real external site (needs DSH_TUI_BROWSER_EXECUTABLE + key/proxy):

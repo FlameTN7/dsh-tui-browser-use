@@ -25,7 +25,7 @@ import type {
   PdfParams, PdfResult,
   ResultEnvelope, Usage, ErrorCode, PreparedImage,
 } from './types.js'
-import { t } from './i18n.js'
+import { t, type Lang } from './i18n.js'
 import { prepareScreenshot } from './image-pipeline.js'
 import { validateJsonSchema, parseJsonReply, type SchemaNode } from './schema-validate.js'
 
@@ -122,19 +122,35 @@ function objSchema(properties: Record<string, Record<string, unknown>>, required
   }
 }
 
+/** Result of preparing a captured page for vision, plus tiling diagnostics. */
+interface PreparedCapture {
+  images: PreparedImage[]
+  /** Instruction suffix warning the model about dropped tiles ('' when none). */
+  tilingNote: string
+  truncated: boolean
+  segmentsTotal: number
+  captured: number
+  capturedHeight: number
+  pageHeight: number
+}
+
 /**
  * Capture the page as one or more segment screenshots and prepare each for
- * vision. Tall pages are already split by `BrowserSession.captureSegments`
+ * vision. Tall/wide pages are already split by `BrowserSession.captureSegments`
  * (scroll-capture tiling), so each prepared image is a native-resolution
  * viewport capture; no further pixel tiling is applied. When the page splits
  * into multiple segments, each prepared image is labeled with its tile index.
+ *
+ * When some needed segments were dropped because the `maxTiles` cap was reached,
+ * a localized `tilingNote` is produced so the caller can append it to the vision
+ * instruction — the model would otherwise silently see only the captured tiles.
  */
-async function capturePreparedImages(session: BrowserSession): Promise<PreparedImage[]> {
-  const bufs = await session.captureSegments()
+async function capturePreparedImages(session: BrowserSession, lang: Lang): Promise<PreparedCapture> {
+  const cap = await session.captureSegments()
   const dim = session.config.screenshot.maxDimension
   const [w = 1280, h = 720] = dim.toLowerCase().split('x').map((s) => Number.parseInt(s, 10))
-  const total = bufs.length
-  return bufs.map((buf, i) => {
+  const total = cap.buffers.length
+  const images = cap.buffers.map((buf, i) => {
     const [img] = prepareScreenshot(buf, {
       format: session.config.screenshot.format,
       quality: session.config.screenshot.quality,
@@ -145,6 +161,25 @@ async function capturePreparedImages(session: BrowserSession): Promise<PreparedI
     if (total > 1 && img) img.tile = { index: i + 1, total }
     return img
   }).filter((img): img is PreparedImage => Boolean(img))
+
+  let tilingNote = ''
+  if (cap.truncated) {
+    tilingNote = t('tiling.truncated.note', lang, {
+      captured: cap.captured,
+      total: cap.segmentsTotal,
+      dropped: Math.max(0, cap.segmentsTotal - cap.captured),
+      heightPx: Math.round(cap.capturedHeight),
+    })
+  }
+  return {
+    images,
+    tilingNote,
+    truncated: cap.truncated,
+    segmentsTotal: cap.segmentsTotal,
+    captured: cap.captured,
+    capturedHeight: cap.capturedHeight,
+    pageHeight: cap.pageHeight,
+  }
 }
 
 /** Resolve the vision env; null means vision is off or the key is missing. */
@@ -230,23 +265,33 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       async execute(args: unknown): Promise<ResultEnvelope<ScreenshotResult>> {
         const p = (args ?? {}) as ScreenshotParams
         try {
-          const images = await capturePreparedImages(session)
+          const cap = await capturePreparedImages(session, lang)
           const env = await deps.resolveVisionEnv()
           const visionActive = deps.visionMode !== 'off' && env !== null
           let insight = ''
           let fileId = ''
-          if (visionActive && env && images.length > 0) {
+          if (visionActive && env && cap.images.length > 0) {
             const { analyzeImages } = await import('./vision.js')
-            const res = await analyzeImages(env, images, p.instruction)
+            const instruction = [p.instruction, cap.tilingNote].filter(Boolean).join(' ')
+            const res = await analyzeImages(env, cap.images, instruction || undefined)
             insight = res.insight || t('screenshot.insight.empty', lang)
-            fileId = images[0]?.fileId ?? ''
+            fileId = cap.images[0]?.fileId ?? ''
           }
           // Best-effort element summary from DOM text if vision is off.
           let elementSummary = ''
           if (!visionActive) {
             elementSummary = await session.elementSummary()
           }
-          return ok({ visualInsight: insight, elementSummary, fileId })
+          return ok({
+            visualInsight: insight,
+            elementSummary,
+            fileId,
+            tilesTotal: cap.segmentsTotal,
+            tilesCaptured: cap.captured,
+            tilesTruncated: cap.truncated,
+            capturedHeight: cap.capturedHeight,
+            pageHeight: cap.pageHeight,
+          })
         } catch (err) { return fail(err) }
       },
     },
@@ -322,7 +367,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
           if (!p.schema || typeof p.schema !== 'object') return fail(t('error.argument', lang, { message: 'schema (JSON Schema) is required' }))
           const env = await visionEnvOrNull(deps)
           if (!env) return fail(t('error.vision-unavailable', lang))
-          const images = await capturePreparedImages(session)
+          const cap = await capturePreparedImages(session, lang)
           const { analyzeImages } = await import('./vision.js')
 
           // The schema contract is asserted on every attempt so the model never
@@ -330,12 +375,13 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
           const baseInstruction = p.instruction
             ? `${p.instruction} Return ONLY a JSON object that satisfies the provided JSON Schema. Do not wrap it in markdown or add commentary.`
             : 'Extract structured data from the screenshot. Return ONLY a JSON object that satisfies the provided JSON Schema. Do not wrap it in markdown or add commentary.'
+          const instruction = cap.tilingNote ? `${baseInstruction} ${cap.tilingNote}` : baseInstruction
 
           try {
             const { data, usage } = await extractWithRetry(
-              (instruction) => analyzeImages(env, images, instruction),
+              (callInstruction) => analyzeImages(env, cap.images, callInstruction),
               p.schema as SchemaNode,
-              baseInstruction,
+              instruction,
             )
             return ok({ data }, usage)
           } catch (retryErr) {
@@ -373,15 +419,15 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
           const { analyzeImages } = await import('./vision.js')
           while (steps < maxSteps && !done && consecutiveFailures < maxFailures) {
             steps += 1
-            const images = await capturePreparedImages(session)
+            const cap = await capturePreparedImages(session, lang)
             // Inject a budget warning when approaching the step ceiling so the
             // agent winds down and reports a partial result instead of burning
             // the remaining budget (mirrors browser-use's `_inject_budget_warning`).
             const budgetNote = steps >= budget
               ? ` You have used about ${steps}/${maxSteps} steps. Finish now with {"action":"done","answer":"..."} — prefer a partial result over exhausting the budget.`
               : ''
-            const res = await analyzeImages(env, images,
-              `You are a browser automation agent. Task: ${p.instruction}. Look at the current screenshot and choose the NEXT single action that advances the task. Reply ONLY with a JSON object, one of: {"action":"click","selector":"..."}, {"action":"type","selector":"...","text":"..."}, {"action":"navigate","url":"..."}, or {"action":"done","answer":"..."}. Prefer visible text selectors. Do not wrap in markdown.${budgetNote}`)
+            const res = await analyzeImages(env, cap.images,
+              `You are a browser automation agent. Task: ${p.instruction}. Look at the current screenshot and choose the NEXT single action that advances the task. Reply ONLY with a JSON object, one of: {"action":"click","selector":"..."}, {"action":"type","selector":"...","text":"..."}, {"action":"navigate","url":"..."}, or {"action":"done","answer":"..."}. Prefer visible text selectors. Do not wrap in markdown.${budgetNote}${cap.tilingNote ? ` ${cap.tilingNote}` : ''}`)
             cost = res.usage
             const action = parseJsonReply(res.insight) as { action?: string; selector?: string; text?: string; url?: string; answer?: string } | undefined
             if (!action?.action) { answer = 'Could not interpret the page.'; done = true; break }

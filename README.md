@@ -162,6 +162,10 @@ Playwright 截图
 **为什么 `tiling=auto`？**
 - 小截图（≤1200×1200）不切，省 token
 - 大截图（整页/高分辨率）自动切块，保证细节可见。4-6 块 ≈ 2304 token ≈ $0.0005，成本可忽略
+- **宽页也分片**：按 `视口宽−overlap` 分列 + `视口高−overlap` 分行，宽页不再只留最左视口。
+- **截断上报**：需要段数超过 `maxTiles`（默认 12）时，`browser_screenshot` 结果透出
+  `tilesTotal`/`tilesCaptured`/`tilesTruncated`，并向视觉模型注入「内容到 ~Y px 为止、其后缺失」。
+- **sticky 去重**：相邻块边缘 `overlap` 重叠，视觉指令说明「属同一页面区域，勿重复计数」。
 
 ## 构建与验证
 
@@ -172,6 +176,7 @@ npm run check          # CI 门禁：build+smoke+verify:manifest+verify:i18n+rou
 npm run smoke          # 无头冒烟（入口 + 能力判定 + 截图预处理 + 工具定义，20 工具）
 npm run test:logic     # 纯逻辑测试：extract 重试 + 提示注入护栏（无需浏览器/key）
 npm run test:integration # 真实浏览器集成（需 DSH_TUI_BROWSER_EXECUTABLE）
+npm run test:tiling-defects # tiling 三缺陷回归：宽页分片/截断上报/控制页（需 DSH_TUI_BROWSER_EXECUTABLE）
 npm run verify:manifest # @dsh-std/manifest 校验 dsh-plugin.json
 npm run verify:i18n     # 双语字典完整性/占位符一致性校验
 # 视模型全链路 / 真实外网站点（需 DSH_TUI_BROWSER_EXECUTABLE + 对应 key/代理）：

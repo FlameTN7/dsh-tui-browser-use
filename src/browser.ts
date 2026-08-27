@@ -15,7 +15,7 @@
 import { existsSync, openSync, readSync, closeSync, statSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ErrorCode, NavigateParams, NavigateResult, ClickParams, ClickResult, TypeParams, TypeResult, EvaluateParams, EvaluateResult, ScreenshotParams, StatusResult, SnapshotParams, SnapshotNode, SnapshotResult, NavigationResult, ScrollParams, ScrollResult, PressParams, PressResult, WaitParams, WaitResult, HoverParams, HoverResult, CookiesParams, CookiesResult, ConsoleMessagesParams, ConsoleMessagesResult, NetworkRequestsParams, NetworkRequestsResult, PdfParams, PdfResult, I18nTemplate, BrowserUseConfig } from './types.js'
+import type { ErrorCode, NavigateParams, NavigateResult, ClickParams, ClickResult, TypeParams, TypeResult, EvaluateParams, EvaluateResult, ScreenshotParams, StatusResult, SnapshotParams, SnapshotNode, SnapshotResult, NavigationResult, ScrollParams, ScrollResult, PressParams, PressResult, WaitParams, WaitResult, HoverParams, HoverResult, CookiesParams, CookiesResult, ConsoleMessagesParams, ConsoleMessagesResult, NetworkRequestsParams, NetworkRequestsResult, PdfParams, PdfResult, I18nTemplate, BrowserUseConfig, CaptureSegmentsResult } from './types.js'
 import { t } from './i18n.js'
 
 // ── Structural Playwright types (no hard dependency) ─────────────────────
@@ -793,59 +793,101 @@ export class BrowserSession {
   }
 
   /**
-   * Capture the page as one or more viewport screenshots, splitting tall pages
-   * into readable segments via scroll-capture tiling.
+   * Capture the page as one or more viewport screenshots, splitting pages that
+   * exceed the tiling threshold into readable segments via scroll-capture
+   * tiling.
    *
    * When `tiling.mode` is `off`, or the page fits within the viewport/threshold
    * under `auto`, it returns a single screenshot (identical to
    * {@link captureScreenshot}). Otherwise it scrolls the page in viewport-sized
-   * steps and captures each segment, honoring the configured overlap. Each
-   * segment is a native-resolution viewport capture, so a very tall page never
-   * produces one oversized image that a vision model cannot read.
+   * steps along BOTH axes and captures each segment, honoring the configured
+   * overlap (so a very tall page never produces one oversized image a vision
+   * model cannot read, and a very wide page is not clipped to the left viewport).
+   *
+   * The result reports whether any needed segment was dropped because the
+   * `maxTiles` cap was reached (`truncated`), how many tiles were planned vs
+   * captured, and the pixel extent covered — so callers can surface the loss to
+   * the agent instead of silently omitting content.
    */
-  async captureSegments(): Promise<Buffer[]> {
+  async captureSegments(): Promise<CaptureSegmentsResult> {
     if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
     const page = this.requirePage()
     const type = this.config.screenshot.format === 'png' ? 'png' : 'jpeg'
     const quality = type === 'jpeg' ? this.config.screenshot.quality : undefined
     const dim = dimensionPair(this.config.screenshot.maxDimension)
+    const vpW = dim.width
+    const vpH = dim.height
     const overlap = Math.max(0, this.config.tiling.overlap || 0)
+    const stepX = Math.max(1, vpW - overlap)
+    const stepY = Math.max(1, vpH - overlap)
+
+    const single = async (): Promise<CaptureSegmentsResult> => {
+      const buf = await page.screenshot({ type, quality })
+      return { buffers: [buf], truncated: false, segmentsTotal: 1, captured: 1, capturedWidth: vpW, capturedHeight: vpH, pageWidth: vpW, pageHeight: vpH }
+    }
 
     // No tiling requested → single viewport capture.
-    if (this.config.tiling.mode === 'off') {
-      return [await page.screenshot({ type, quality })]
-    }
+    if (this.config.tiling.mode === 'off') return single()
 
-    // Determine the scrollable height and the "needs tiling" threshold.
-    const pageHeight = await page.evaluate<number>(
-      'Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)',
-    ).catch(() => 0)
-    const dimH = this.config.tiling.threshold.split('x').map((s) => Number.parseInt(s.trim(), 10))
-    const thresholdH = Number.isFinite(dimH[1] as number) ? (dimH[1] as number) : dim.height
+    // Determine the scrollable width/height and the "needs tiling" thresholds.
+    const size = await page.evaluate<{ w: number; h: number }>(
+      '({ w: Math.max(document.body.scrollWidth, document.documentElement.scrollWidth), h: Math.max(document.body.scrollHeight, document.documentElement.scrollHeight) })',
+    ).catch(() => ({ w: 0, h: 0 }))
+    const pageW = size.w
+    const pageH = size.h
+    const dimT = this.config.tiling.threshold.split('x').map((s) => Number.parseInt(s.trim(), 10))
+    const thresholdW = Number.isFinite(dimT[0] as number) ? (dimT[0] as number) : vpW
+    const thresholdH = Number.isFinite(dimT[1] as number) ? (dimT[1] as number) : vpH
 
-    // `auto`: single capture when the page already fits the viewport/threshold.
-    if (this.config.tiling.mode === 'auto' && pageHeight > 0 && pageHeight <= Math.max(thresholdH, dim.height)) {
-      return [await page.screenshot({ type, quality })]
-    }
-    // Unknown height (e.g. detached document): fall back to a single capture.
-    if (pageHeight <= 0) {
-      return [await page.screenshot({ type, quality })]
-    }
+    // `auto`: single capture when the page already fits the viewport/threshold in
+    // BOTH axes. Unknown dimensions (e.g. detached document) also fall back to a
+    // single capture.
+    const fits = pageW > 0 && pageH > 0 && pageW <= Math.max(thresholdW, vpW) && pageH <= Math.max(thresholdH, vpH)
+    if (this.config.tiling.mode === 'auto' && fits) return single()
+    if (pageW <= 0 || pageH <= 0) return single()
 
-    // Scroll-capture tiling: step by (viewport height - overlap).
-    const step = Math.max(1, dim.height - overlap)
-    const buffers: Buffer[] = []
+    // Scroll-capture tiling: iterate along x (horizontal strips) and within each
+    // strip down the y axis, each step (viewport size - overlap). Both axes loop
+    // so a page wider than the viewport is captured as multiple columns instead
+    // of being clipped to the left viewport. Reading order is row-major
+    // (top-left → bottom-right within a column, then the next column to the
+    // right), matching how the model reads a grid of tiles.
     const maxTiles = envNum('DSH_TUI_BROWSER_MAX_TILES', 12)
-    for (let y = 0; y < pageHeight && buffers.length < maxTiles; y += step) {
-      await page.evaluate(`window.scrollTo(0, ${y})`).catch(() => undefined)
-      // Wait two animation frames so the segment is painted before capture.
-      await page.evaluate('new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))').catch(() => undefined)
-      buffers.push(await page.screenshot({ type, quality }))
+    const neededCols = pageW > vpW ? Math.ceil((pageW - vpW) / stepX) + 1 : 1
+    const neededRows = pageH > vpH ? Math.ceil((pageH - vpH) / stepY) + 1 : 1
+    const segmentsTotal = neededCols * neededRows
+
+    const buffers: Buffer[] = []
+    let capturedWidth = 0
+    let capturedHeight = 0
+    outer: for (let cx = 0; cx < neededCols; cx += 1) {
+      const x = cx * stepX
+      for (let cy = 0; cy < neededRows; cy += 1) {
+        if (buffers.length >= maxTiles) break outer
+        const y = cy * stepY
+        await page.evaluate(`window.scrollTo(${x}, ${y})`).catch(() => undefined)
+        // Wait two animation frames so the segment is painted before capture.
+        await page.evaluate('new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))').catch(() => undefined)
+        buffers.push(await page.screenshot({ type, quality }))
+        capturedWidth = Math.max(capturedWidth, x + vpW)
+        capturedHeight = Math.max(capturedHeight, y + vpH)
+      }
     }
     // Restore the scroll position for the next tool call.
     await page.evaluate('window.scrollTo(0, 0)').catch(() => undefined)
-    if (buffers.length === 0) buffers.push(await page.screenshot({ type, quality }))
-    return buffers
+    if (buffers.length === 0) return single()
+
+    const truncated = buffers.length < segmentsTotal
+    return {
+      buffers,
+      truncated,
+      segmentsTotal,
+      captured: buffers.length,
+      capturedWidth: Math.min(capturedWidth, pageW),
+      capturedHeight: Math.min(capturedHeight, pageH),
+      pageWidth: pageW,
+      pageHeight: pageH,
+    }
   }
 
   /**

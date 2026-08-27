@@ -137,6 +137,36 @@ export interface ScreenshotResult {
   elementSummary: string
   /** DeepSeek file_api `file_id` when the official file path was used. */
   fileId: string
+  /** Tiling: total tiles that would cover the whole page (1 when not tiled). */
+  tilesTotal?: number
+  /** Tiling: tiles actually captured (≤ `tilesTotal`). */
+  tilesCaptured?: number
+  /** Tiling: true when some tiles were dropped because `maxTiles` was reached. */
+  tilesTruncated?: boolean
+  /** Tiling: vertical pixel extent actually captured. */
+  capturedHeight?: number
+  /** Full scrollable page height in px. */
+  pageHeight?: number
+}
+
+/** Result of a scroll-capture tiling pass over the page. */
+export interface CaptureSegmentsResult {
+  /** Captured segment buffers, in reading order. */
+  buffers: Buffer[]
+  /** True when the page needed more tiles than `maxTiles` and some were dropped. */
+  truncated: boolean
+  /** Total tiles that would cover the whole page (before the maxTiles cap). */
+  segmentsTotal: number
+  /** Number of tiles actually captured. */
+  captured: number
+  /** Horizontal pixel extent covered by the captured tiles. */
+  capturedWidth: number
+  /** Vertical pixel extent covered by the captured tiles. */
+  capturedHeight: number
+  /** Full scrollable page width in px. */
+  pageWidth: number
+  /** Full scrollable page height in px. */
+  pageHeight: number
 }
 
 /** `browser.click` parameters. */

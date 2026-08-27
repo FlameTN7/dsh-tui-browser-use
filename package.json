@@ -33,6 +33,7 @@
     "test:logic": "node --import tsx/esm scripts/extract-retry-check.mjs && node --import tsx/esm scripts/vision-prompt-fence-check.mjs",
     "test:integration": "node --import tsx/esm scripts/browser-integration.ts",
     "test:container": "node scripts/container-register-check.mjs",
+    "test:tiling-defects": "node --import tsx/esm scripts/tiling-defect-check.ts",
     "test:vision": "node scripts/vision-check.mjs",
     "test:vision-cache": "node scripts/vision-cache-check.mjs",
     "test:vision-router": "node scripts/vision-router-check.mjs",

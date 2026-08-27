@@ -143,8 +143,9 @@ async function main() {
   const tallPath = join(d, 'tall.html')
   writeFileSync(tallPath, tallHtml)
   await session.navigate({ url: 'file://' + tallPath })
-  const segments = await session.captureSegments()
-  console.log('[integ] captureSegments: count=', segments.length, 'sizes=', segments.map((b) => b.length))
+  const cap = await session.captureSegments()
+  const segments = cap.buffers
+  console.log('[integ] captureSegments: count=', segments.length, 'sizes=', segments.map((b) => b.length), 'truncated=', cap.truncated, 'planned=', cap.segmentsTotal)
   assert.ok(segments.length >= 2, 'tall page split into multiple segments')
   for (const seg of segments) {
     assert.ok(seg.length > 1000, 'each segment is a real screenshot')
