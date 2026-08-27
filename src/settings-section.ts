@@ -9,6 +9,14 @@
  * The section is soft-probed (`ctx.get('tuiSettingsSections', false)`): a
  * composition without the seam silently degrades instead of failing the
  * plugin.
+ *
+ * Field semantics (match the seam's `TuiSettingsField`):
+ *  - `label` + `descriptions`: the row label (descriptions are the localized
+ *    label; `pick(label, descriptions)` returns `descriptions[lang] ?? label`).
+ *  - `hint` + `hintDescriptions`: the one-line help rendered under the focused
+ *    field (`pick(hint, hintDescriptions)`). Wiring a long explanation into
+ *    `descriptions` is the exact mistake that puts the whole sentence on the
+ *    label line — it belongs in `hint`.
  */
 
 import { dict } from './i18n.js'
@@ -31,6 +39,7 @@ interface SettingsField {
   label: string
   descriptions?: LocalizedDescription
   hint?: string
+  hintDescriptions?: LocalizedDescription
   kind: 'text' | 'number' | 'boolean' | 'select'
   options?: readonly SettingsFieldOption[]
   placeholder?: string
@@ -65,13 +74,16 @@ export function registerSettingsSection(ctx: { get(name: string, optional?: bool
 
   const section: SettingsSection = {
     ns: 'browser-use',
-    title: 'Browser Automation (browser-use)',
-    descriptions: { zh: d('settings.title')?.zh ?? '浏览器自动化 (browser-use)', en: d('settings.title')?.en ?? 'Browser Automation (browser-use)' },
+    // Title is the bare name; the screen appends `(ns)` itself, so keep it out.
+    title: d('settings.title')?.en ?? 'Browser Automation',
+    descriptions: d('settings.title'),
     fields: [
       {
         path: ['visionMode'],
         label: d('settings.visionMode.label')?.en ?? 'Vision mode',
-        descriptions: { zh: d('settings.visionMode.description')?.zh ?? '视觉模式', en: d('settings.visionMode.description')?.en ?? 'Vision mode' },
+        descriptions: d('settings.visionMode.label'),
+        hint: d('settings.visionMode.description')?.en,
+        hintDescriptions: d('settings.visionMode.description'),
         kind: 'select',
         options: [
           { value: 'auto', label: 'Auto', descriptions: { zh: '自动', en: 'Auto' } },
@@ -83,31 +95,39 @@ export function registerSettingsSection(ctx: { get(name: string, optional?: bool
       {
         path: ['screenshot', 'format'],
         label: d('settings.screenshot.format.label')?.en ?? 'Screenshot format',
-        descriptions: { zh: d('settings.screenshot.format.label')?.zh ?? '截图格式', en: d('settings.screenshot.format.label')?.en ?? 'Screenshot format' },
+        descriptions: d('settings.screenshot.format.label'),
+        hint: d('settings.screenshot.format.description')?.en,
+        hintDescriptions: d('settings.screenshot.format.description'),
         kind: 'select',
         options: [
-          { value: 'jpeg', label: 'JPEG' },
-          { value: 'webp', label: 'WebP' },
-          { value: 'png', label: 'PNG' },
+          { value: 'jpeg', label: 'JPEG', descriptions: { zh: 'JPEG', en: 'JPEG' } },
+          { value: 'webp', label: 'WebP', descriptions: { zh: 'WebP', en: 'WebP' } },
+          { value: 'png', label: 'PNG', descriptions: { zh: 'PNG', en: 'PNG' } },
         ],
       },
       {
         path: ['screenshot', 'quality'],
         label: d('settings.screenshot.quality.label')?.en ?? 'Quality (1-100)',
-        descriptions: { zh: d('settings.screenshot.quality.label')?.zh ?? '质量 (1-100)', en: d('settings.screenshot.quality.label')?.en ?? 'Quality (1-100)' },
+        descriptions: d('settings.screenshot.quality.label'),
+        hint: d('settings.screenshot.quality.description')?.en,
+        hintDescriptions: d('settings.screenshot.quality.description'),
         kind: 'number',
       },
       {
         path: ['screenshot', 'maxDimension'],
         label: d('settings.screenshot.maxDimension.label')?.en ?? 'Max dimension (widthxheight)',
-        descriptions: { zh: d('settings.screenshot.maxDimension.label')?.zh ?? '最大尺寸 (宽x高)', en: d('settings.screenshot.maxDimension.label')?.en ?? 'Max dimension (widthxheight)' },
+        descriptions: d('settings.screenshot.maxDimension.label'),
+        hint: d('settings.screenshot.maxDimension.description')?.en,
+        hintDescriptions: d('settings.screenshot.maxDimension.description'),
         kind: 'text',
         placeholder: '1024x768',
       },
       {
         path: ['tiling', 'mode'],
         label: d('settings.tiling.mode.label')?.en ?? 'Tiling mode',
-        descriptions: { zh: d('settings.tiling.mode.label')?.zh ?? '切分模式', en: d('settings.tiling.mode.label')?.en ?? 'Tiling mode' },
+        descriptions: d('settings.tiling.mode.label'),
+        hint: d('settings.tiling.mode.description')?.en,
+        hintDescriptions: d('settings.tiling.mode.description'),
         kind: 'select',
         options: [
           { value: 'auto', label: 'Auto', descriptions: { zh: '自动', en: 'Auto' } },
@@ -118,14 +138,18 @@ export function registerSettingsSection(ctx: { get(name: string, optional?: bool
       {
         path: ['tiling', 'threshold'],
         label: d('settings.tiling.threshold.label')?.en ?? 'Tiling threshold (widthxheight)',
-        descriptions: { zh: d('settings.tiling.threshold.label')?.zh ?? '切分阈值 (宽x高)', en: d('settings.tiling.threshold.label')?.en ?? 'Tiling threshold (widthxheight)' },
+        descriptions: d('settings.tiling.threshold.label'),
+        hint: d('settings.tiling.threshold.description')?.en,
+        hintDescriptions: d('settings.tiling.threshold.description'),
         kind: 'text',
         placeholder: '1200x1200',
       },
       {
         path: ['tiling', 'overlap'],
         label: d('settings.tiling.overlap.label')?.en ?? 'Overlap pixels',
-        descriptions: { zh: d('settings.tiling.overlap.label')?.zh ?? '重叠像素', en: d('settings.tiling.overlap.label')?.en ?? 'Overlap pixels' },
+        descriptions: d('settings.tiling.overlap.label'),
+        hint: d('settings.tiling.overlap.description')?.en,
+        hintDescriptions: d('settings.tiling.overlap.description'),
         kind: 'number',
       },
     ],
