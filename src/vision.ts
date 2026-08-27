@@ -14,6 +14,7 @@
  * the result (never required for the tool to succeed).
  */
 
+import { createHash } from 'node:crypto'
 import type { ImageTransfer, PreparedImage, Usage, VisionMode } from './types.js'
 
 /** Resolved vision request environment. */
@@ -85,13 +86,19 @@ function estimateUsage(model: string, visionMode: VisionMode, imagesSent: number
   const rates = costRates()
   const costUsd = (promptTokens * rates.input + completionTokens * rates.output) / 1_000_000
   const costCny = costUsd * 7.2
-  return { model, visionMode, imagesSent, promptTokens, completionTokens, costUsd, costCny }
+  return { model, visionMode, imagesSent, promptTokens, completionTokens, promptCacheHitTokens: 0, promptCacheMissTokens: promptTokens, costUsd, costCny }
 }
 
-/** Compute cost (USD/CNY) from real prompt/completion token counts. */
-function costFromUsage(promptTokens: number, completionTokens: number): { costUsd: number; costCny: number } {
+/**
+ * Compute cost (USD/CNY) from real prompt/completion token counts. Prompt tokens
+ * that hit the provider's disk cache are billed at the (much lower) cache-hit
+ * rate; the rest at the normal input rate.
+ */
+function costFromUsage(promptTokens: number, completionTokens: number, cacheHitTokens = 0): { costUsd: number; costCny: number } {
   const rates = costRates()
-  const costUsd = (promptTokens * rates.input + completionTokens * rates.output) / 1_000_000
+  const hit = Math.max(0, Math.min(cacheHitTokens, promptTokens))
+  const miss = promptTokens - hit
+  const costUsd = (miss * rates.input + hit * rates.cacheHit + completionTokens * rates.output) / 1_000_000
   return { costUsd, costCny: costUsd * 7.2 }
 }
 
@@ -100,6 +107,50 @@ type ChatContent = Record<string, unknown>
 
 function baseUrlOf(env: VisionEnv): string {
   return env.baseUrl.replace(/\/+$/, '')
+}
+
+// ── File-api lifetime + content-hash reuse ────────────────────────────────
+//
+// DeepSeek's Files API accepts optional `expires_after` (1h–30d); omitting it
+// keeps the file forever. A bounded lifetime stops files piling up and MUST be
+// long enough that a `file_id` reused across a session's requests (to hit the
+// disk cache) does not expire mid-conversation.
+// `DSH_TUI_BROWSER_FILE_EXPIRES_SECONDS` sets it (default 86400 = 24h;
+// 0 / empty / negative / non-numeric → permanent, i.e. `expires_after` omitted).
+const FILE_EXPIRES_ENV = 'DSH_TUI_BROWSER_FILE_EXPIRES_SECONDS'
+const DEFAULT_FILE_EXPIRES_SECONDS = 86400
+
+function fileExpiresSeconds(): number | null {
+  const v = process.env[FILE_EXPIRES_ENV]
+  if (v === undefined || v === '') return DEFAULT_FILE_EXPIRES_SECONDS
+  const n = Number.parseInt(v, 10)
+  return Number.isFinite(n) && n > 0 ? n : null // null → permanent
+}
+
+// Reuse one file_id per distinct image payload so repeated requests carrying the
+// same screenshot hit DeepSeek's disk cache: the `file_id` is a stable token in
+// the prompt prefix, while a freshly uploaded `file_id` never matches a cached
+// prefix and base64 inline content changes with every capture. Bounded so a long
+// session cannot leak memory unboundedly.
+const MAX_CACHED_FILE_IDS = 64
+const fileIdCache = new Map<string, string>() // contentHash → file_id
+
+async function reusableFileId(env: VisionEnv, image: PreparedImage, baseUrl: string): Promise<string> {
+  if (image.fileId) return image.fileId
+  const hash = createHash('sha256').update(image.data).digest('hex')
+  const hit = fileIdCache.get(hash)
+  if (hit) {
+    image.fileId = hit
+    return hit
+  }
+  const fileId = await uploadFile(env, image, baseUrl)
+  image.fileId = fileId
+  fileIdCache.set(hash, fileId)
+  if (fileIdCache.size > MAX_CACHED_FILE_IDS) {
+    const oldest = fileIdCache.keys().next().value
+    if (oldest !== undefined) fileIdCache.delete(oldest)
+  }
+  return fileId
 }
 
 // ── Retry (scnet is prone to 429; gateways intermittently return 5xx) ─────
@@ -167,6 +218,13 @@ async function uploadFile(env: VisionEnv, image: PreparedImage, baseUrl: string)
   const ext = image.mime.split('/')[1] ?? 'jpeg'
   form.append('purpose', 'user_data')
   form.append('file', new Blob([image.data], { type: image.mime }), `shot-${Date.now()}.${ext}`)
+  // Bounded retention so stored files do not pile up forever; a `null` lifetime
+  // (env unset/zero) omits the fields → the file is kept permanently.
+  const expires = fileExpiresSeconds()
+  if (expires !== null) {
+    form.append('expires_after[anchor]', 'created_at')
+    form.append('expires_after[seconds]', String(expires))
+  }
   const resp = await fetchWithRetry(`${baseUrl}/files`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${env.apiKey}` },
@@ -196,10 +254,10 @@ async function chatWithImages(env: VisionEnv, images: PreparedImage[], instructi
 
   for (const image of images) {
     if (env.imageTransfer === 'file') {
-      const fileId = image.fileId ?? (await uploadFile(env, image, baseUrl))
+      const fileId = await reusableFileId(env, image, baseUrl)
       // Persist the uploaded id on the image so callers (browser_screenshot)
-      // can surface it as `fileId` instead of always seeing ''.
-      image.fileId = fileId
+      // can surface it as `fileId` instead of always seeing ''; reusing it is
+      // also what lets repeated identical requests hit the disk cache.
       content.push({ type: 'file', file_id: fileId })
     } else if (env.imageTransfer === 'base64' || env.imageTransfer === 'url') {
       const mime = image.mime
@@ -238,7 +296,7 @@ async function chatWithImages(env: VisionEnv, images: PreparedImage[], instructi
   })
   const body = await parseJsonRobust(resp) as {
     choices?: Array<{ message?: { content?: unknown } }>
-    usage?: { prompt_tokens?: number; completion_tokens?: number }
+    usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_cache_hit_tokens?: number; prompt_cache_miss_tokens?: number }
     error?: { message?: string }
   }
   if (!resp.ok) {
@@ -247,19 +305,24 @@ async function chatWithImages(env: VisionEnv, images: PreparedImage[], instructi
   const raw = body.choices?.[0]?.message?.content
   const text = Array.isArray(raw) ? raw.map((b) => (b as { text?: string })?.text ?? '').join('') : (typeof raw === 'string' ? raw : '')
 
+  const cacheHit = body.usage?.prompt_cache_hit_tokens ?? 0
+  const cacheMiss = body.usage?.prompt_cache_miss_tokens ?? 0
   const usage: Usage = {
     model: env.model,
     visionMode: env.imageTransfer === 'file' ? 'deepseek-file-api' : 'auto',
     imagesSent: images.length,
     promptTokens: body.usage?.prompt_tokens ?? 0,
     completionTokens: body.usage?.completion_tokens ?? 0,
+    promptCacheHitTokens: cacheHit,
+    promptCacheMissTokens: cacheMiss,
     costUsd: 0,
     costCny: 0,
   }
   if (body.usage) {
     // Real token counts → compute cost against the configured rates so the
-    // agent sees an actual (not placeholder) spend on browser_task.
-    const c = costFromUsage(usage.promptTokens, usage.completionTokens)
+    // agent sees an actual (not placeholder) spend on browser_task. Cache-hit
+    // prompt tokens are billed at the (far lower) cache rate.
+    const c = costFromUsage(usage.promptTokens, usage.completionTokens, cacheHit)
     usage.costUsd = c.costUsd
     usage.costCny = c.costCny
   } else {
@@ -267,6 +330,8 @@ async function chatWithImages(env: VisionEnv, images: PreparedImage[], instructi
     const est = estimateUsage(env.model, usage.visionMode, images.length, text.length)
     usage.promptTokens = est.promptTokens
     usage.completionTokens = est.completionTokens
+    usage.promptCacheHitTokens = est.promptCacheHitTokens
+    usage.promptCacheMissTokens = est.promptCacheMissTokens
     usage.costUsd = est.costUsd
     usage.costCny = est.costCny
   }

@@ -145,6 +145,12 @@ Playwright screenshot
 - Upload once, reference many times (multi-step reuse), request body free from base64 bloat
 - Single image up to 64 MiB, beyond the 32 MiB base64-inline limit
 - Low token / high cache: ≤384 tokens per image, file_id hits prompt cache
+- **File lifetime**: an upload accepts `expires_after[seconds]` (1h–30d; omit for permanent). `DSH_TUI_BROWSER_FILE_EXPIRES_SECONDS`
+  controls it (default 24h; `0`/empty/negative → permanent). The default avoids piling up files forever and outlives
+  a single session, so a reused file_id never expires mid-conversation.
+- **file_id reuse (content-hash)**: identical screenshot bytes reuse one file_id, avoiding re-uploads and keeping the
+  request prefix stable → hits DeepSeek's disk prompt cache. The cache surfaces in `usage` as `promptCacheHitTokens` /
+  `promptCacheMissTokens`, and cost bills hit tokens at the cache-hit discount rate.
 
 **Model-call retry**: OpenAI-compatible / official endpoints retry on 429/5xx with exponential
 backoff (`fetchWithRetry`, 600ms base, jitter, up to 4 retries), honoring `Retry-After`. This
@@ -177,6 +183,7 @@ npm run verify:manifest # @dsh-std/manifest validates dsh-plugin.json
 npm run verify:i18n     # bilingual dictionary completeness / placeholder parity
 # Vision full-chain / real external site (needs DSH_TUI_BROWSER_EXECUTABLE + key/proxy):
 npm run test:vision        # DeepSeek file_api single image
+npm run test:vision-cache  # file_api / cache-hit verification (needs DSH_TUI_BROWSER_EXECUTABLE + DeepSeek key)
 npm run test:vision-mimo   # xiaomi mimo-v2.5 base64
 npm run test:vision-router # provider route (via apply()) → xiaomi
 npm run test:vision-textonly # text model degrades to DOM

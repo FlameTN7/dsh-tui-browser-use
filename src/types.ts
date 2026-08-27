@@ -28,6 +28,10 @@ export interface Usage {
   imagesSent: number
   promptTokens: number
   completionTokens: number
+  /** Input tokens that hit the provider's disk/prompt cache (0 when absent). */
+  promptCacheHitTokens: number
+  /** Input tokens that missed the cache (0 when absent). */
+  promptCacheMissTokens: number
   costUsd: number
   costCny: number
 }

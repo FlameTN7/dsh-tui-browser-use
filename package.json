@@ -34,6 +34,7 @@
     "test:integration": "node --import tsx/esm scripts/browser-integration.ts",
     "test:container": "node scripts/container-register-check.mjs",
     "test:vision": "node scripts/vision-check.mjs",
+    "test:vision-cache": "node scripts/vision-cache-check.mjs",
     "test:vision-router": "node scripts/vision-router-check.mjs",
     "test:vision-textonly": "node scripts/vision-textonly-check.mjs",
     "test:vision-tiling": "node scripts/vision-tiling-check.mjs",

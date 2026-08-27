@@ -142,6 +142,11 @@ Playwright 截图
 - 截图上传一次，多次引用（多步任务复用），请求体不受 base64 膨胀
 - 单图可达 64 MiB，超出 base64 内联的 32 MiB 限制
 - 低 token 高缓存：每张 ≤384 token，file_id 可命中 prompt cache
+- **文件存活期**：上传可设 `expires_after[seconds]`（1h–30d，省略=永久）。`DSH_TUI_BROWSER_FILE_EXPIRES_SECONDS`
+  控制（默认 24h；`0`/空/负 → 永久）。默认不永久堆积，且长于一次会话，保证复用的 file_id 不透支。
+- **file_id 复用（content-hash）**：同一张截图（相同字节）复用同一 file_id，避免重复上传，也让重复请求的
+  前缀稳定 → 命中 DeepSeek 磁盘 prompt cache。缓存在 `usage` 透出
+  `promptCacheHitTokens` / `promptCacheMissTokens`，计费对命中 token 按 cache-hit 折扣费率。
 
 **模型调用重试**：OpenAI 兼容端点/官方 API 在 429/5xx 时按指数退避重试（`fetchWithRetry`，
 基础 600ms 增长，抖动 ±，上限 4 次），尊重 `Retry-After`。scnet 这类易 429 的端点由此扛住。
@@ -171,6 +176,7 @@ npm run verify:manifest # @dsh-std/manifest 校验 dsh-plugin.json
 npm run verify:i18n     # 双语字典完整性/占位符一致性校验
 # 视模型全链路 / 真实外网站点（需 DSH_TUI_BROWSER_EXECUTABLE + 对应 key/代理）：
 npm run test:vision        # DeepSeek file_api 单图
+npm run test:vision-cache  # file_api/缓存命中验证（需 DSH_TUI_BROWSER_EXECUTABLE + DeepSeek key）
 npm run test:vision-mimo   # xiaomi mimo-v2.5 base64
 npm run test:vision-router # provider 路由(经 apply())→ xiaomi
 npm run test:vision-textonly # 文本模型降级 DOM
