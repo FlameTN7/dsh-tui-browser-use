@@ -59,8 +59,23 @@ interface SettingsSectionsRuntime {
 // ── Registration ─────────────────────────────────────────────────────────
 
 /**
- * Register the plugin's settings section. Returns nothing — a failure or
- * missing seam just logs (if debug) and leaves settings to patch config.
+ * Register the plugin's settings section on the dsh-tui section registry.
+ *
+ * The registration is DEFERRED to a microtask so it runs after dsh-tui's own
+ * `ns:'dsh-tui'` section is inserted. The screen renders sections in registry
+ * insertion order (a Map, one entry per namespace), so registering early — as
+ * happened when this plugin's `apply` ran before dsh-tui's — put the
+ * `browser-use` section at the TOP of `/settings`. Deferring until the current
+ * synchronous boot phase settles appends it LAST, moving it below the host's
+ * own (and any other plugin's) section. The namespace registration on the
+ * settings *service* (the `[命名空间未注册]` fix) stays synchronous and is
+ * untouched.
+ *
+ * The section registry records the owner from the SERVICE context, not the
+ * calling stack, so a deferred `register()` still resolves a valid owner; the
+ * channel reads the host list (`host.list()`), which returns every section in
+ * insertion order regardless of owner. A missing seam just logs (if debug) and
+ * leaves settings to patch config.
  */
 export function registerSettingsSection(ctx: { get(name: string, optional?: boolean): unknown }, debug?: (msg: string) => void): (() => void) | undefined {
   const sections = ctx.get('tuiSettingsSections', false) as SettingsSectionsRuntime | undefined
@@ -155,7 +170,22 @@ export function registerSettingsSection(ctx: { get(name: string, optional?: bool
     ],
   }
 
-  const disposer = sections.register(section)
-  debug?.(`settings section registered: ns=${section.ns} fields=${section.fields.length} title="${section.title}"`)
-  return disposer
+  // Defer the actual `register()` so this section is appended after dsh-tui's
+  // own section (see the doc comment above). Return a disposer that cancels the
+  // pending registration or unregisters the already-registered section.
+  let runtimeDisposer: (() => void) | undefined
+  let cancelled = false
+  queueMicrotask(() => {
+    if (cancelled) return
+    try {
+      runtimeDisposer = sections.register(section)
+      debug?.(`settings section registered: ns=${section.ns} fields=${section.fields.length} title="${section.title}"`)
+    } catch (err) {
+      debug?.(`settings section register failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  })
+  return () => {
+    cancelled = true
+    runtimeDisposer?.()
+  }
 }
