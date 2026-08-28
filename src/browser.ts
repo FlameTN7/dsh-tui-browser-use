@@ -846,12 +846,14 @@ export class BrowserSession {
     if (this.config.tiling.mode === 'auto' && fits) return single()
     if (pageW <= 0 || pageH <= 0) return single()
 
-    // Scroll-capture tiling: iterate along x (horizontal strips) and within each
-    // strip down the y axis, each step (viewport size - overlap). Both axes loop
-    // so a page wider than the viewport is captured as multiple columns instead
-    // of being clipped to the left viewport. Reading order is row-major
-    // (top-left → bottom-right within a column, then the next column to the
-    // right), matching how the model reads a grid of tiles.
+    // Scroll-capture tiling: iterate top-to-bottom in BANDS, and within each
+    // band left-to-right across the columns — ROW-major reading order, which is
+    // how the model naturally reads a grid of tiles (top-left → bottom-right).
+    // Both axes loop, so a page wider than the viewport is captured as multiple
+    // columns instead of being clipped to the left viewport. Row-major matters
+    // under the maxTiles cap: filling a whole band (all columns) before moving
+    // down means truncation drops the BOTTOM of the page (the same semantic as a
+    // tall page), never an entire right-hand column while a band is half-read.
     const maxTiles = envNum('DSH_TUI_BROWSER_MAX_TILES', 12)
     const neededCols = pageW > vpW ? Math.ceil((pageW - vpW) / stepX) + 1 : 1
     const neededRows = pageH > vpH ? Math.ceil((pageH - vpH) / stepY) + 1 : 1
@@ -860,11 +862,11 @@ export class BrowserSession {
     const buffers: Buffer[] = []
     let capturedWidth = 0
     let capturedHeight = 0
-    outer: for (let cx = 0; cx < neededCols; cx += 1) {
-      const x = cx * stepX
-      for (let cy = 0; cy < neededRows; cy += 1) {
+    outer: for (let cy = 0; cy < neededRows; cy += 1) {
+      const y = cy * stepY
+      for (let cx = 0; cx < neededCols; cx += 1) {
         if (buffers.length >= maxTiles) break outer
-        const y = cy * stepY
+        const x = cx * stepX
         await page.evaluate(`window.scrollTo(${x}, ${y})`).catch(() => undefined)
         // Wait two animation frames so the segment is painted before capture.
         await page.evaluate('new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))').catch(() => undefined)

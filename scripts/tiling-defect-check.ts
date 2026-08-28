@@ -52,6 +52,18 @@ function widePage(width: number, height = 768): string {
   return `<!doctype html><html><head><meta charset="utf-8"><title>wide</title><style>body{margin:0}.strip{height:${height}px;width:${width}px}</style></head><body><div class="strip">WIDE</div></body></html>`
 }
 
+function gridPage(width: number, height: number, blockW = 1000, blockH = 1000): string {
+  const strips: string[] = []
+  for (let y = 0; y < height; y += blockH) {
+    const row: string[] = []
+    for (let x = 0; x < width; x += blockW) {
+      row.push(`<div style="position:absolute;left:${x}px;top:${y}px;width:${blockW}px;height:${blockH}px;border:1px solid #999">G${y / blockH}x${x / blockW}</div>`)
+    }
+    strips.push(row.join(''))
+  }
+  return `<!doctype html><html><head><meta charset="utf-8"><title>grid</title></head><body style="margin:0"><div style="position:relative;width:${width}px;height:${height}px">${strips.join('')}</div></body></html>`
+}
+
 function step(msg: string): void {
   process.stdout.write('[tiling-defect] ' + msg + '\n')
 }
@@ -97,6 +109,27 @@ async function main() {
     assert.equal(cap.captured, 3, 'capped at maxTiles')
     assert.equal(cap.truncated, true, 'truncation is reported')
     assert.ok(cap.segmentsTotal > 3, 'planned segments exceed the cap')
+  }
+
+  // D) Wide+tall grid under the cap → ROW-major: a full-width top band is read
+  // before moving down (not a full-height left column that leaves every other
+  // column unread). This guards the reading-order fix.
+  {
+    const p = join(dir, 'grid.html')
+    writeFileSync(p, gridPage(5000, 3000)) // → 6 cols x 5 rows = 30 tiles
+    await s.navigate({ url: 'file://' + p })
+    const prev = process.env.DSH_TUI_BROWSER_MAX_TILES
+    // Cap to exactly the column count: row-major reads one full band (all 6
+    // columns) → capturedWidth == full page width; column-major would read the
+    // whole left column (full height) and only ~2 columns wide.
+    process.env.DSH_TUI_BROWSER_MAX_TILES = '6'
+    const cap = await s.captureSegments()
+    if (prev === undefined) delete process.env.DSH_TUI_BROWSER_MAX_TILES
+    else process.env.DSH_TUI_BROWSER_MAX_TILES = prev
+    step(`D grid (maxTiles=6): buffers=${cap.buffers.length} truncated=${cap.truncated} planned=${cap.segmentsTotal} capturedWidth=${cap.capturedWidth} capturedHeight=${cap.capturedHeight} pageWidth=${cap.pageWidth} pageHeight=${cap.pageHeight}`)
+    assert.equal(cap.captured, 6, 'capped at maxTiles (== columns)')
+    assert.ok(cap.capturedWidth >= cap.pageWidth, 'row-major: first band spans the full width')
+    assert.ok(cap.capturedHeight < cap.pageHeight / 2, 'row-major: only the top band is read, not the whole height')
   }
 
   await s.close()
