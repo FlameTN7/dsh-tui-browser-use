@@ -19,7 +19,7 @@ All tools live in the `browser_*` namespace and return a unified envelope
 | Tool | Purpose | Key params |
 |---|---|---|
 | `browser_navigate` | Go to a URL | `url` |
-| `browser_screenshot` | Capture + understand the page | `instruction?` |
+| `browser_screenshot` | Capture + understand the page | `instruction?` / `savePath?` |
 | `browser_click` | Click by selector or visible text | `selector?` / `text?` |
 | `browser_type` | Fill an input | `selector`, `text` |
 | `browser_evaluate` | Run JS in the page | `expression` |
@@ -35,6 +35,7 @@ All tools live in the `browser_*` namespace and return a unified envelope
 | `browser_console_messages` | Capture console output | `clear?` |
 | `browser_network_requests` | Capture network requests | `clear?` |
 | `browser_pdf` | Print the page to a PDF | `path?` / `format?` |
+| `browser_download` | Download a file from a URL to disk (uses session cookies/auth) | `url` / `savePath?` |
 | `browser_status` | Check availability + config | — |
 
 ## Common workflow

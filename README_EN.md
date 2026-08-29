@@ -57,6 +57,7 @@ A browser-use capability aligned with Claude Code, but natively adapted for the 
 | `browser_console_messages` | Console capture | `[type] text`, `clear` (default true) |
 | `browser_network_requests` | Network capture | `REQ <method> <url>` / `<status> <url>` / `<no-response> <url>`, `clear` (default true) |
 | `browser_pdf` | Print to PDF | Returns `{ url, path, bytes }`; temp file when `path` omitted |
+| `browser_download` | Download file | Uses the session request context (cookies/auth) to fetch a URL; returns `{ url, path, bytes, contentType }` |
 | `browser_status` | Browser status | Availability / version / configuration |
 
 ## Configuration
@@ -78,6 +79,8 @@ The main config is exposed through the [dsh-tui settings section](https://github
 | `tiling.mode` | `auto` | `auto` (split when over threshold) / `on` / `off` |
 | `tiling.threshold` | `1200×1200` | Splits the screenshot if it exceeds this size |
 | `tiling.overlap` | `60` | Tile overlap pixels |
+| `tiling.maxTiles` | `24` | Max scroll-capture segments; `DSH_TUI_BROWSER_MAX_TILES` env backs off |
+| `proxy` | — (empty) | HTTP proxy (e.g. `http://127.0.0.1:10800`); empty falls back to `DSH_TUI_BROWSER_PROXY` |
 | `providers` | `[]` | Per-provider capability overrides (built-in table backs off) |
 
 ### Provider capability overrides
@@ -175,7 +178,7 @@ never as a directive (defends against prompt injection).
 - Small screenshots (≤1200×1200) are not split — saves tokens
 - Large screenshots (full-page / high-res) auto-split for detail. 4-6 tiles ≈ 2304 tokens ≈ $0.0005, negligible cost
 - **Wide pages also split**: columns step by `viewport-width − overlap` and rows by `viewport-height − overlap`, so a wide page is no longer clipped to the left viewport.
-- **Truncation reported**: when a page needs more tiles than `maxTiles` (default 12), `browser_screenshot` surfaces `tilesTotal`/`tilesCaptured`/`tilesTruncated` and injects a "content only read down to ~Y px, rest is missing" note into the vision instruction.
+- **Truncation reported**: when a page needs more tiles than `maxTiles` (default 24, adjustable via `/settings` or `DSH_TUI_BROWSER_MAX_TILES`), `browser_screenshot` surfaces `tilesTotal`/`tilesCaptured`/`tilesTruncated` and injects a "content only read down to ~Y px, rest is missing" note into the vision instruction.
 - **sticky de-dup**: adjacent tiles overlap at the seam; the vision instruction says duplicated band is the same page region — never double-count it.
 
 ## Build & verify

@@ -55,6 +55,7 @@
 | `browser_console_messages` | console 捕获 | `[type] text`，`clear`（默认 true） |
 | `browser_network_requests` | 网络捕获 | `REQ <method> <url>` / `<status> <url>` / `<no-response> <url>`，`clear`（默认 true） |
 | `browser_pdf` | 打印 PDF | 返回 `{ url, path, bytes }`，`path` 省略则写入临时文件 |
+| `browser_download` | 下载文件 | 用会话请求上下文（带 cookie/鉴权）拉 URL，返回 `{ url, path, bytes, contentType }` |
 | `browser_status` | 浏览器状态 | 可用性/版本/配置 |
 
 ## 配置
@@ -76,6 +77,8 @@
 | `tiling.mode` | `auto` | `auto`（超阈值自动切分）/ `on` / `off` |
 | `tiling.threshold` | `1200×1200` | 超过则该截图进入切分流程 |
 | `tiling.overlap` | `60` | tile 间重叠像素 |
+| `tiling.maxTiles` | `24` | 滚动分段截图最大段数；`DSH_TUI_BROWSER_MAX_TILES` env 兜底 |
+| `proxy` | —（空） | HTTP 代理（如 `http://127.0.0.1:10800`），留空回退 `DSH_TUI_BROWSER_PROXY` |
 | `providers` | `[]` | 用户可配置各 provider 的能力覆盖（内置表兜底） |
 
 ### Provider 能力覆盖
@@ -168,7 +171,7 @@ Playwright 截图
 - 小截图（≤1200×1200）不切，省 token
 - 大截图（整页/高分辨率）自动切块，保证细节可见。4-6 块 ≈ 2304 token ≈ $0.0005，成本可忽略
 - **宽页也分片**：按 `视口宽−overlap` 分列 + `视口高−overlap` 分行，宽页不再只留最左视口。
-- **截断上报**：需要段数超过 `maxTiles`（默认 12）时，`browser_screenshot` 结果透出
+- **截断上报**：需要段数超过 `maxTiles`（默认 24，可经 `/settings` 或 `DSH_TUI_BROWSER_MAX_TILES` 调整）时，`browser_screenshot` 结果透出
   `tilesTotal`/`tilesCaptured`/`tilesTruncated`，并向视觉模型注入「内容到 ~Y px 为止、其后缺失」。
 - **sticky 去重**：相邻块边缘 `overlap` 重叠，视觉指令说明「属同一页面区域，勿重复计数」。
 
