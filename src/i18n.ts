@@ -33,32 +33,40 @@ export const dict: I18nDict = {
   // field label. Wiring it into `descriptions` (the localized LABEL) is what put
   // the whole sentence on the label line in /settings.
   'settings.visionMode.description': {
-    zh: 'auto 自动判定（官方 DeepSeek 走文件 API，其他走 base64）；on 强制开启；off 纯 DOM；deepseek-file-api 强制官方文件路径',
-    en: 'auto detects (official DeepSeek uses the file API, others base64); on forces vision; off is pure DOM; deepseek-file-api forces the official file path',
+    zh: 'auto 自动判定（官方 DeepSeek 走文件 API，其他走 base64）；on 尝试开启（仍受模型视觉能力与密钥门控）；off 纯 DOM；deepseek-file-api 强制官方文件路径',
+    en: 'auto detects (official DeepSeek uses the file API, others base64); on attempts vision (still gated by model capability + key); off is pure DOM; deepseek-file-api forces the official file path',
   },
   'settings.screenshot.format.label': {
     zh: '截图格式',
     en: 'Screenshot format',
   },
   'settings.screenshot.format.description': {
-    zh: '截图输出格式。jpeg 体积小（默认）；webp 更省；png 无损但更大。',
-    en: 'Screenshot output format. jpeg is compact (default); webp is smaller; png is lossless but larger.',
+    zh: '截图输出格式。jpeg 体积小（默认）；png 无损但更大。',
+    en: 'Screenshot output format. jpeg is compact (default); png is lossless but larger.',
   },
   'settings.screenshot.quality.label': {
     zh: '质量 (1-100)',
     en: 'Quality (1-100)',
   },
   'settings.screenshot.quality.description': {
-    zh: '截图质量 (1-100)。仅对 jpeg/webp 生效，越高越清晰、体积越大。',
-    en: 'Screenshot quality (1-100). Applies to jpeg/webp; higher is sharper but larger.',
+    zh: '截图质量 (1-100)。仅对 jpeg 生效，越高越清晰、体积越大。',
+    en: 'Screenshot quality (1-100). Applies to jpeg; higher is sharper but larger.',
   },
-  'settings.screenshot.maxDimension.label': {
-    zh: '最大尺寸 (宽x高)',
-    en: 'Max dimension (widthxheight)',
+  'settings.viewport.width.label': {
+    zh: '视口宽度 (px)',
+    en: 'Viewport width (px)',
   },
-  'settings.screenshot.maxDimension.description': {
-    zh: '单张截图最大尺寸（宽×高）。超过则按比例缩放，避免超出模型分辨率上限。',
-    en: 'Max screenshot size (widthxheight). Scaled down when exceeded, to stay under the model resolution limit.',
+  'settings.viewport.width.description': {
+    zh: '浏览器视口宽度（CSS 像素），决定页面 innerWidth 与响应式断点。',
+    en: 'Browser viewport width (CSS px); sets page innerWidth and responsive breakpoints.',
+  },
+  'settings.viewport.height.label': {
+    zh: '视口高度 (px)',
+    en: 'Viewport height (px)',
+  },
+  'settings.viewport.height.description': {
+    zh: '浏览器视口高度（CSS 像素）。',
+    en: 'Browser viewport height (CSS px).',
   },
   'settings.tiling.mode.label': {
     zh: '切分模式',

@@ -135,7 +135,7 @@ function fileExpiresSeconds(): number | null {
 const MAX_CACHED_FILE_IDS = 64
 const fileIdCache = new Map<string, string>() // contentHash → file_id
 
-async function reusableFileId(env: VisionEnv, image: PreparedImage, baseUrl: string): Promise<string> {
+async function reusableFileId(env: VisionEnv, image: PreparedImage, baseUrl: string, signal?: AbortSignal): Promise<string> {
   if (image.fileId) return image.fileId
   const hash = createHash('sha256').update(image.data).digest('hex')
   const hit = fileIdCache.get(hash)
@@ -143,7 +143,7 @@ async function reusableFileId(env: VisionEnv, image: PreparedImage, baseUrl: str
     image.fileId = hit
     return hit
   }
-  const fileId = await uploadFile(env, image, baseUrl)
+  const fileId = await uploadFile(env, image, baseUrl, signal)
   image.fileId = fileId
   fileIdCache.set(hash, fileId)
   if (fileIdCache.size > MAX_CACHED_FILE_IDS) {
@@ -183,16 +183,20 @@ function backoffDelayMs(attempt: number, baseDelayMs: number): number {
  * exponential backoff + jitter. Non-retryable but failed responses surface
  * immediately. `maxRetries` is 0 to disable.
  */
-async function fetchWithRetry(url: string, init: RequestInit, maxRetries = DEFAULT_MAX_RETRIES): Promise<Response> {
+async function fetchWithRetry(url: string, init: RequestInit, maxRetries = DEFAULT_MAX_RETRIES, signal?: AbortSignal): Promise<Response> {
   let attempt = 0
   // A fetch network error (connection refused / DNS) is also worth retrying once.
   for (;;) {
     let resp: Response
     try {
-      resp = await fetch(url, init)
+      // Thread the caller's abort signal through so a wall-clock timeout (which
+      // fires `exec.signal`) can cancel a hanging vision/api TCP connect instead
+      // of wedging the tool forever (P0-02).
+      resp = await fetch(url, signal ? { ...init, signal } : init)
     } catch (err) {
       if (attempt >= maxRetries) throw err
       await new Promise((r) => setTimeout(r, backoffDelayMs(attempt, DEFAULT_BASE_DELAY_MS)))
+      if (signal?.aborted) throw signal.reason ?? new Error('aborted')
       attempt += 1
       continue
     }
@@ -201,6 +205,7 @@ async function fetchWithRetry(url: string, init: RequestInit, maxRetries = DEFAU
     }
     const delay = retryAfterMs(resp) ?? backoffDelayMs(attempt, DEFAULT_BASE_DELAY_MS)
     await new Promise((r) => setTimeout(r, delay))
+    if (signal?.aborted) throw signal.reason ?? new Error('aborted')
     attempt += 1
   }
 }
@@ -213,7 +218,7 @@ async function parseJsonRobust(resp: Response): Promise<Record<string, unknown>>
 }
 
 /** Upload one image to the DeepSeek Files API and return its `file_id`. */
-async function uploadFile(env: VisionEnv, image: PreparedImage, baseUrl: string): Promise<string> {
+async function uploadFile(env: VisionEnv, image: PreparedImage, baseUrl: string, signal?: AbortSignal): Promise<string> {
   const form = new FormData()
   const ext = image.mime.split('/')[1] ?? 'jpeg'
   form.append('purpose', 'user_data')
@@ -229,7 +234,7 @@ async function uploadFile(env: VisionEnv, image: PreparedImage, baseUrl: string)
     method: 'POST',
     headers: { Authorization: `Bearer ${env.apiKey}` },
     body: form,
-  })
+  }, DEFAULT_MAX_RETRIES, signal)
   const body = await parseJsonRobust(resp) as { id?: string; file_id?: string; error?: { message?: string } }
   if (!resp.ok) {
     throw new Error(`file upload failed (${resp.status}): ${body.error?.message ?? 'unknown'}`)
@@ -245,7 +250,7 @@ async function uploadFile(env: VisionEnv, image: PreparedImage, baseUrl: string)
  * `file_id`. For `base64` they are inlined. Images only ever appear in a
  * `user` message (proposal §5.4.3).
  */
-async function chatWithImages(env: VisionEnv, images: PreparedImage[], instruction: string): Promise<{ text: string; usage: Usage }> {
+async function chatWithImages(env: VisionEnv, images: PreparedImage[], instruction: string, signal?: AbortSignal): Promise<{ text: string; usage: Usage }> {
   if (!env.apiKey) {
     throw new Error('vision.apiKey missing')
   }
@@ -254,7 +259,7 @@ async function chatWithImages(env: VisionEnv, images: PreparedImage[], instructi
 
   for (const image of images) {
     if (env.imageTransfer === 'file') {
-      const fileId = await reusableFileId(env, image, baseUrl)
+      const fileId = await reusableFileId(env, image, baseUrl, signal)
       // Persist the uploaded id on the image so callers (browser_screenshot)
       // can surface it as `fileId` instead of always seeing ''; reusing it is
       // also what lets repeated identical requests hit the disk cache.
@@ -293,7 +298,7 @@ async function chatWithImages(env: VisionEnv, images: PreparedImage[], instructi
       Authorization: `Bearer ${env.apiKey}`,
     },
     body: JSON.stringify({ model: env.model, messages, temperature: 0 }),
-  })
+  }, DEFAULT_MAX_RETRIES, signal)
   const body = await parseJsonRobust(resp) as {
     choices?: Array<{ message?: { content?: unknown } }>
     usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_cache_hit_tokens?: number; prompt_cache_miss_tokens?: number }
@@ -342,14 +347,14 @@ async function chatWithImages(env: VisionEnv, images: PreparedImage[], instructi
  * Analyze one or more prepared images against the current provider.
  * Returns the textual insight (may be empty) plus usage accounting.
  */
-export async function analyzeImages(env: VisionEnv, images: PreparedImage[], instruction?: string): Promise<VisionResult> {
+export async function analyzeImages(env: VisionEnv, images: PreparedImage[], instruction?: string, signal?: AbortSignal): Promise<VisionResult> {
   // The caller has already resolved the transfer mode (user override > built-in
   // table > model-name fallback). `none` means the provider can't see images.
   if (env.imageTransfer === 'none') {
     throw new Error('vision-unavailable')
   }
   try {
-    const { text, usage } = await chatWithImages(env, images, instruction ?? '')
+    const { text, usage } = await chatWithImages(env, images, instruction ?? '', signal)
     return { insight: text, usage }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)

@@ -34,8 +34,8 @@ export interface ToolDeps {
   session: BrowserSession
   /** Resolve the vision request environment from the current provider (async). */
   resolveVisionEnv(): Promise<VisionEnv | null>
-  /** Effective vision mode for this call. */
-  visionMode: 'auto' | 'on' | 'off' | 'deepseek-file-api'
+  /** Effective vision mode for this call (a getter, so a live `/settings` edit takes effect immediately). */
+  visionMode(): 'auto' | 'on' | 'off' | 'deepseek-file-api'
   lang: 'zh' | 'en'
 }
 
@@ -60,6 +60,22 @@ function ok<T>(value: T, usage?: Usage): ResultEnvelope<T> {
   return usage !== undefined ? { ok: true, value, usage } : { ok: true, value }
 }
 
+/** Sum two usage blocks (P1-05): `browser_task` accumulates cost across steps. */
+export function accumulateUsage(acc: Usage | undefined, u: Usage): Usage {
+  if (!u) return acc ?? { model: '', visionMode: 'auto', imagesSent: 0, promptTokens: 0, completionTokens: 0, promptCacheHitTokens: 0, promptCacheMissTokens: 0, costUsd: 0, costCny: 0 }
+  if (!acc) return { ...u }
+  return {
+    ...u,
+    imagesSent: acc.imagesSent + u.imagesSent,
+    promptTokens: acc.promptTokens + u.promptTokens,
+    completionTokens: acc.completionTokens + u.completionTokens,
+    promptCacheHitTokens: acc.promptCacheHitTokens + u.promptCacheHitTokens,
+    promptCacheMissTokens: acc.promptCacheMissTokens + u.promptCacheMissTokens,
+    costUsd: acc.costUsd + u.costUsd,
+    costCny: acc.costCny + u.costCny,
+  }
+}
+
 // ANSI escape sequences (most commonly color) leak into browser/error text on
 // some engines. Strip them from any message the model can see, and cap length so
 // a huge call-log snippet cannot blow the context (P2 #12).
@@ -68,6 +84,23 @@ const MAX_MSG = 2000
 
 function sanitizeMessage(msg: string): string {
   return msg.replace(ANSI_RE, '').slice(0, MAX_MSG)
+}
+
+/**
+ * Extract the cooperative abort signal a dsh tool timeout passes as `exec.signal`
+ * (P0-02), with a hard ceiling fallback for hosts whose timeout policy does not
+ * thread a signal (R-02). When `exec.signal` is absent, derive an
+ * `AbortSignal.timeout(fallbackMs)` from the tool's own `timeoutMs` so a hanging
+ * vision fetch (a TCP connect that never resolves) can never wedge the tool —
+ * a long-running `analyzeImages` must always be interruptible.
+ */
+export function abortSignalOf(exec: unknown, fallbackMs?: number): AbortSignal | undefined {
+  const s = (exec as { signal?: AbortSignal } | undefined)?.signal
+  if (s) return s
+  if (fallbackMs && Number.isFinite(fallbackMs) && fallbackMs > 0) {
+    try { return AbortSignal.timeout(fallbackMs) } catch { return undefined }
+  }
+  return undefined
 }
 
 /** Convert an error into a failure envelope. */
@@ -81,20 +114,60 @@ function fail(err: unknown): ResultEnvelope<never> {
   return { ok: false, error: { code: 'browser-error', message: sanitizeMessage(msg) } }
 }
 
+// Cap the rendered success text so a huge page value (e.g. a 50k-char evaluate
+// result) cannot blow the model context. Mark truncation explicitly so the
+// model knows content was dropped (P0-04).
+const MAX_RENDER_TEXT = 14_000
+
 /** Render a snapshot of the value as compact text content for the model. */
-function renderText(_args: unknown, value: unknown): Array<Record<string, unknown>> {
+export function renderText(_args: unknown, value: unknown): Array<Record<string, unknown>> {
   let text: string
   if (value && typeof value === 'object' && 'ok' in value) {
-    const v = value as { ok: boolean; value?: unknown; error?: { message?: string } }
+    const v = value as { ok: boolean; value?: unknown; error?: { code?: string; message?: string }; usage?: Usage }
     if (v.ok) {
-      text = JSON.stringify(v.value ?? null)
+      const parts = [JSON.stringify(v.value ?? null)]
+      // Surface a usage summary so the model can see token/cost spend and
+      // reason about whether a vision read actually cost tokens (P0-04).
+      if (v.usage) {
+        const u = v.usage
+        parts.push(
+          `\n[usage] model=${u.model} images=${u.imagesSent} prompt=${u.promptTokens} `
+          + `completion=${u.completionTokens} cacheHit=${u.promptCacheHitTokens} `
+          + `costUsd=${u.costUsd.toFixed(5)} costCny=${u.costCny.toFixed(4)}`,
+        )
+      }
+      text = parts.join('')
     } else {
-      text = v.error?.message ?? 'tool failed'
+      // Keep the canonical error code visible to the model (not just the human
+      // message) so an agent can branch on it programmatically (P0-04).
+      text = `[${v.error?.code ?? 'browser-error'}] ${v.error?.message ?? 'tool failed'}`
     }
   } else {
     text = JSON.stringify(value ?? null)
   }
+  if (text.length > MAX_RENDER_TEXT) {
+    text = `${text.slice(0, MAX_RENDER_TEXT)}…(truncated, original ${text.length} chars)`
+  }
   return [{ type: 'text', text }]
+}
+
+/**
+ * Render page-derived tool output with an explicit untrusted marker, so the
+ * model treats anything that came out of a live web page as data, not as
+ * instructions to follow (prompt-injection guard, P1-03). Applied only to the
+ * tools whose value is page text / the model's reading of a page.
+ */
+export function renderUntrusted(args: unknown, value: unknown): Array<Record<string, unknown>> {
+  const out = renderText(args, value)
+  // R-08: only a SUCCESSFUL page-derived result carries the untrusted marker. A
+  // failure envelope is an infrastructure error (`[code] message`), not page
+  // content, so it must NOT be labelled untrusted — the model would otherwise
+  // see `[untrusted page content] [browser-error] ...` and misattribute a bug.
+  const v = value as { ok?: boolean } | undefined
+  if (v?.ok === true && out[0] && typeof out[0].text === 'string') {
+    out[0].text = `[untrusted page content] ${out[0].text}`
+  }
+  return out
 }
 
 /** A permissive output schema describing the unified envelope. */
@@ -148,7 +221,7 @@ interface PreparedCapture {
 async function capturePreparedImages(session: BrowserSession, lang: Lang): Promise<PreparedCapture> {
   const cap = await session.captureSegments()
   const dim = session.config.screenshot.maxDimension
-  const [w = 1280, h = 720] = dim.toLowerCase().split('x').map((s) => Number.parseInt(s, 10))
+  const [w = 1280, h = 720] = (dim || '1024x768').toLowerCase().split('x').map((s) => Number.parseInt(s, 10))
   const total = cap.buffers.length
   const images = cap.buffers.map((buf, i) => {
     const [img] = prepareScreenshot(buf, {
@@ -184,7 +257,7 @@ async function capturePreparedImages(session: BrowserSession, lang: Lang): Promi
 
 /** Resolve the vision env; null means vision is off or the key is missing. */
 async function visionEnvOrNull(deps: ToolDeps): Promise<VisionEnv | null> {
-  return deps.visionMode !== 'off' ? deps.resolveVisionEnv() : null
+  return deps.visionMode() !== 'off' ? deps.resolveVisionEnv() : null
 }
 
 /**
@@ -259,33 +332,52 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       parameters: objSchema({
         instruction: { type: 'string', description: 'Optional instruction for the vision model, e.g. "read all link text".' },
       }),
-      output: { schema: envelopeSchema(), render: renderText },
+      output: { schema: envelopeSchema(), render: renderUntrusted },
       timeoutMs: 60_000,
       isConcurrencySafe: () => false,
-      async execute(args: unknown): Promise<ResultEnvelope<ScreenshotResult>> {
+      async execute(args: unknown, exec?: unknown): Promise<ResultEnvelope<ScreenshotResult>> {
         const p = (args ?? {}) as ScreenshotParams
         try {
-          const cap = await capturePreparedImages(session, lang)
+          // Resolve vision BEFORE capturing: when vision is off/unavailable we
+          // short-circuit to a DOM summary instead of screenshotting+tiling a
+          // page the model cannot read (P1-08). This also avoids the redundant
+          // elementSummary path that duplicated browser_snapshot.
           const env = await deps.resolveVisionEnv()
-          const visionActive = deps.visionMode !== 'off' && env !== null
+          const visionActive = deps.visionMode() !== 'off' && env !== null
+          if (!visionActive) {
+            // R-05 (option A): with vision off/unavailable, do NOT run the
+            // redundant DOM elementSummary (which duplicated browser_snapshot).
+            // DOM observation is unified under browser_snapshot; screenshot
+            // signals a degraded no-vision read via visionUsed/Reason.
+            return ok({
+              visualInsight: '',
+              elementSummary: '',
+              fileId: '',
+              visionUsed: false,
+              visionUnavailableReason: deps.visionMode() === 'off' ? 'vision-off' : 'vision-unavailable',
+              tilesTotal: 0,
+              tilesCaptured: 0,
+              tilesTruncated: false,
+              capturedHeight: 0,
+              pageHeight: 0,
+            })
+          }
+
+          const cap = await capturePreparedImages(session, lang)
           let insight = ''
           let fileId = ''
-          if (visionActive && env && cap.images.length > 0) {
+          if (cap.images.length > 0) {
             const { analyzeImages } = await import('./vision.js')
             const instruction = [p.instruction, cap.tilingNote].filter(Boolean).join(' ')
-            const res = await analyzeImages(env, cap.images, instruction || undefined)
+            const res = await analyzeImages(env, cap.images, instruction || undefined, abortSignalOf(exec, 60_000))
             insight = res.insight || t('screenshot.insight.empty', lang)
             fileId = cap.images[0]?.fileId ?? ''
           }
-          // Best-effort element summary from DOM text if vision is off.
-          let elementSummary = ''
-          if (!visionActive) {
-            elementSummary = await session.elementSummary()
-          }
           return ok({
             visualInsight: insight,
-            elementSummary,
+            elementSummary: '',
             fileId,
+            visionUsed: true,
             tilesTotal: cap.segmentsTotal,
             tilesCaptured: cap.captured,
             tilesTruncated: cap.truncated,
@@ -340,7 +432,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       parameters: objSchema({
         expression: { type: 'string', description: 'JavaScript expression or statement to evaluate.' },
       }, ['expression']),
-      output: { schema: envelopeSchema(), render: renderText },
+      output: { schema: envelopeSchema(), render: renderUntrusted },
       timeoutMs: 15_000,
       isConcurrencySafe: () => false,
       async execute(args: unknown): Promise<ResultEnvelope<EvaluateResult>> {
@@ -358,10 +450,10 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         schema: { type: 'object', description: 'JSON Schema the extracted data must satisfy. A JSON object with type/properties/required.' },
         instruction: { type: 'string', description: 'Optional visual instruction that focuses what to extract.' },
       }, ['schema']),
-      output: { schema: envelopeSchema(), render: renderText },
+      output: { schema: envelopeSchema(), render: renderUntrusted },
       timeoutMs: 60_000,
       isConcurrencySafe: () => false,
-      async execute(args: unknown): Promise<ResultEnvelope<ExtractResult>> {
+      async execute(args: unknown, exec?: unknown): Promise<ResultEnvelope<ExtractResult>> {
         const p = (args ?? {}) as ExtractParams
         try {
           if (!p.schema || typeof p.schema !== 'object') return fail(t('error.argument', lang, { message: 'schema (JSON Schema) is required' }))
@@ -379,7 +471,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
 
           try {
             const { data, usage } = await extractWithRetry(
-              (callInstruction) => analyzeImages(env, cap.images, callInstruction),
+              (callInstruction) => analyzeImages(env, cap.images, callInstruction, abortSignalOf(exec, 60_000)),
               p.schema as SchemaNode,
               instruction,
             )
@@ -398,10 +490,10 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         instruction: { type: 'string', description: 'Natural-language task description.' },
         maxSteps: { type: 'integer', description: 'Maximum number of vision-driven actions to take (default 8).' },
       }, ['instruction']),
-      output: { schema: envelopeSchema(), render: renderText },
+      output: { schema: envelopeSchema(), render: renderUntrusted },
       timeoutMs: 120_000,
       isConcurrencySafe: () => false,
-      async execute(args: unknown): Promise<ResultEnvelope<TaskResult>> {
+      async execute(args: unknown, exec?: unknown): Promise<ResultEnvelope<TaskResult>> {
         const p = (args ?? {}) as TaskParams
         try {
           if (!p.instruction) return fail(t('error.argument', lang, { message: 'instruction is required' }))
@@ -427,9 +519,9 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
               ? ` You have used about ${steps}/${maxSteps} steps. Finish now with {"action":"done","answer":"..."} — prefer a partial result over exhausting the budget.`
               : ''
             const res = await analyzeImages(env, cap.images,
-              `You are a browser automation agent. Task: ${p.instruction}. Look at the current screenshot and choose the NEXT single action that advances the task. Reply ONLY with a JSON object, one of: {"action":"click","selector":"..."}, {"action":"type","selector":"...","text":"..."}, {"action":"navigate","url":"..."}, or {"action":"done","answer":"..."}. Prefer visible text selectors. Do not wrap in markdown.${budgetNote}${cap.tilingNote ? ` ${cap.tilingNote}` : ''}`)
-            cost = res.usage
-            const action = parseJsonReply(res.insight) as { action?: string; selector?: string; text?: string; url?: string; answer?: string } | undefined
+              `You are a browser automation agent. Task: ${p.instruction}. Look at the current screenshot and choose the NEXT single action that advances the task. Reply ONLY with a JSON object, one of: {"action":"click","selector":"..."}, {"action":"type","selector":"...","text":"..."}, {"action":"navigate","url":"..."}, {"action":"scroll","x":0,"y":300}, {"action":"press","key":"Enter"}, {"action":"wait","ms":500}, {"action":"hover","selector":"..."}, or {"action":"done","answer":"..."}. Prefer visible text selectors. Do not wrap in markdown.${budgetNote}${cap.tilingNote ? ` ${cap.tilingNote}` : ''}`, abortSignalOf(exec, 120_000))
+            cost = accumulateUsage(cost, res.usage)
+            const action = parseJsonReply(res.insight) as { action?: string; selector?: string; text?: string; url?: string; key?: string; x?: number; y?: number; ms?: number; answer?: string } | undefined
             if (!action?.action) { answer = 'Could not interpret the page.'; done = true; break }
             if (action.action === 'done') { answer = action.answer ?? 'Task complete.'; done = true; break }
             // Execute one action; a failure counts toward the consecutive-failure
@@ -445,6 +537,15 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
                 case 'type':
                   if (action.selector && action.text !== undefined) { await session.type({ selector: action.selector, text: action.text }); break }
                   answer = 'type action missing selector or text.'; done = true; break
+                case 'scroll':
+                  await session.scroll({ x: action.x, y: action.y }); break
+                case 'press':
+                  if (action.key) { await session.press({ key: action.key }); break }
+                  answer = 'press action missing key.'; done = true; break
+                case 'wait':
+                  await session.wait({ ms: action.ms }); break
+                case 'hover':
+                  await session.hover({ selector: action.selector, text: action.text }); break
                 default:
                   answer = 'Unknown action was proposed.'; done = true; break
               }
@@ -460,7 +561,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
           if (!done && !answer) answer = consecutiveFailures >= maxFailures
             ? `Gave up after ${consecutiveFailures} consecutive failed actions.`
             : `Reached ${maxSteps} steps without finishing.`
-          const durationS = Math.round((Date.now() - start) / 1000)
+          const durationS = Number(((Date.now() - start) / 1000).toFixed(1))
           return ok({ answer, steps, durationS, cost: { usd: cost?.costUsd ?? 0, cny: cost?.costCny ?? 0 } }, cost)
         } catch (err) { return fail(err) }
       },
@@ -486,7 +587,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       parameters: objSchema({
         maxNodes: { type: 'integer', description: 'Maximum nodes to return (default 200, capped at 500).' },
       }),
-      output: { schema: envelopeSchema(), render: renderText },
+      output: { schema: envelopeSchema(), render: renderUntrusted },
       timeoutMs: 15_000,
       isConcurrencySafe: () => false,
       async execute(args: unknown): Promise<ResultEnvelope<SnapshotResult>> {
@@ -617,6 +718,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       parameters: objSchema({
         clear: { type: 'boolean', description: 'Clear all cookies first (default false).' },
         cookies: { type: 'array', description: 'Cookies to add before returning, each { name, value, url?/domain?/path? }.' },
+        readValues: { type: 'boolean', description: 'Return cookie VALUES (default false — values are masked as *** so auth state never leaks).' },
       }),
       output: { schema: envelopeSchema(), render: renderText },
       timeoutMs: 10_000,
@@ -635,7 +737,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       parameters: objSchema({
         clear: { type: 'boolean', description: 'Clear the buffer after returning (default true).' },
       }),
-      output: { schema: envelopeSchema(), render: renderText },
+      output: { schema: envelopeSchema(), render: renderUntrusted },
       timeoutMs: 5_000,
       isConcurrencySafe: () => true,
       async execute(args: unknown): Promise<ResultEnvelope<ConsoleMessagesResult>> {
@@ -652,7 +754,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       parameters: objSchema({
         clear: { type: 'boolean', description: 'Clear the buffer after returning (default true).' },
       }),
-      output: { schema: envelopeSchema(), render: renderText },
+      output: { schema: envelopeSchema(), render: renderUntrusted },
       timeoutMs: 5_000,
       isConcurrencySafe: () => true,
       async execute(args: unknown): Promise<ResultEnvelope<NetworkRequestsResult>> {

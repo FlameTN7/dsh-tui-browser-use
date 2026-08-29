@@ -110,6 +110,7 @@ interface PwPage {
   on(event: 'console', handler: (message: PwConsoleMessage) => void): void
   on(event: 'request', handler: (request: PwRequest) => void): void
   on(event: 'response', handler: (response: PwResponse) => void): void
+  on(event: 'requestfailed', handler: (request: PwRequest) => void): void
 }
 
 /** A child frame, with the same locator query surface as the page. */
@@ -322,10 +323,11 @@ function isRealBrowserBinary(p: string): boolean {
 
 // ── Structural config helpers ────────────────────────────────────────────
 
-/** Compute `width×height` from a `maxDimension` config string. */
-function dimensionPair(dim: string): { width: number; height: number } {
-  const [w = 1280, h = 720] = dim.toLowerCase().split('x').map((s) => Number.parseInt(s.trim(), 10))
-  return { width: Number.isFinite(w) ? w : 1280, height: Number.isFinite(h) ? h : 720 }
+/** Compute `width×height` from a viewport/config string (defaults 1024×768). */
+function dimensionPair(dim: string | undefined): { width: number; height: number } {
+  const s = (dim || '1024x768').toLowerCase()
+  const [w = 1024, h = 768] = s.split('x').map((seg) => Number.parseInt(seg.trim(), 10))
+  return { width: Number.isFinite(w) && w > 0 ? w : 1024, height: Number.isFinite(h) && h > 0 ? h : 768 }
 }
 
 /** Numeric env override helper: returns the parsed value or the fallback. */
@@ -333,6 +335,38 @@ function envNum(name: string, fallback: number): number {
   const v = process.env[name]
   const n = v ? Number.parseFloat(v) : NaN
   return Number.isFinite(n) && n >= 0 ? n : fallback
+}
+
+// ── Sensitive-data redaction (P1-04) ──────────────────────────────────────
+//
+// Cookie values, URLs in the network log, and `href` in the a11y snapshot can
+// carry credentials (session tokens, API keys, signed URLs). Default to
+// redacting so a page's auth state never leaks into the model context. The
+// query-key list is configurable via DSH_TUI_BROWSER_SENSITIVE_QUERY_KEYS.
+
+const SENSITIVE_QUERY_KEYS = (process.env.DSH_TUI_BROWSER_SENSITIVE_QUERY_KEYS ?? 'token,key,signature,sig,secret,api_key,apikey,access_token,session,cred,auth')
+  .split(',').map((s) => s.trim()).filter(Boolean)
+
+/** Scrub sensitive query params from a URL; best-effort, never throws. */
+export function sanitizeUrl(raw: string): string {
+  if (!raw) return raw
+  try {
+    const u = new URL(raw)
+    for (const key of [...u.searchParams.keys()]) {
+      if (SENSITIVE_QUERY_KEYS.some((k) => key.toLowerCase().includes(k.toLowerCase()))) {
+        u.searchParams.delete(key)
+      }
+    }
+    return u.toString()
+  } catch {
+    // Relative href / unparseable: strip common `?key=value` pairs by hand.
+    return raw.replace(/([?&](?:token|key|signature|sig|secret|api_key|apikey|access_token|session|cred|auth)=)[^&]*/gi, '$1***')
+  }
+}
+
+/** Mask a cookie value unless the caller explicitly asked to read it (P1-04). */
+export function cookieValue(value: string, readValues: boolean): string {
+  return readValues ? value : '***'
 }
 
 /** The long-lived browser session shared across tool calls. */
@@ -394,10 +428,38 @@ export class BrowserSession {
    * same single-browser-page lock (P1 #9): concurrent tool calls become a strict
    * serial queue instead of interleaving Playwright operations.
    */
+  /** Resolve the effective viewport size (P0-03). Prefers the explicit
+   * `viewport` config; falls back to the deprecated `screenshot.maxDimension`
+   * alias used by older configs / test scripts, then the 1024×768 default. */
+  private viewportSize(): { width: number; height: number } {
+    const v = this.config.viewport
+    if (v && Number.isFinite(v.width) && Number.isFinite(v.height) && v.width > 0 && v.height > 0) {
+      return { width: v.width, height: v.height }
+    }
+    return dimensionPair(this.config.screenshot.maxDimension)
+  }
+
   run<T>(task: () => Promise<T>): Promise<T> {
     const result = this.chain.then(() => task())
     this.chain = result.then(() => undefined, () => undefined)
     return result
+  }
+
+  /**
+   * Hot-apply a new viewport size to the live page (R-07). When the browser is
+   * already started, a `/settings` change to `viewport` must resize the current
+   * page rather than only taking effect on the next session (which would
+   * silently ignore a mid-session edit). Serialized through `run()` so it never
+   * interleaves a pending Playwright tool call. A not-yet-started session is a
+   * no-op (the next `ensureStarted()` reads the new config).
+   */
+  async applyViewport(size?: { width: number; height: number }): Promise<void> {
+    const dim = size ?? this.viewportSize()
+    const page = this.page
+    if (!page) return
+    await this.run(async () => {
+      await page.setViewportSize({ width: dim.width, height: dim.height }).catch(() => undefined)
+    })
   }
 
   /** Load the playwright module safely; returns null if it isn't installed. */
@@ -497,7 +559,7 @@ export class BrowserSession {
           }
         }
       }
-      const dim = dimensionPair(this.config.screenshot.maxDimension)
+      const dim = this.viewportSize()
       // Session-state persistence (P1 #8): an explicit context is used when a
       // storageState snapshot is configured (preloaded if it already exists) so
       // a login state can be saved back on close. Every path keeps a context
@@ -523,8 +585,20 @@ export class BrowserSession {
         this.consoleLog.push(`[${m.type()}] ${m.text()}`)
         if (this.consoleLog.length > BrowserSession.CAPTURE_CAP) this.consoleLog.shift()
       })
+      // Network capture records both requests and responses (and a
+      // `<no-response>` marker for failed/dropped ones, e.g. CORS/DNS) so a
+      // failing XHR is visible in `browser_network_requests` (P1-09). URLs are
+      // sanitized so query tokens never leak (P1-04).
+      this.page.on('request', (r) => {
+        this.networkLog.push(`REQ ${r.method()} ${sanitizeUrl(r.url())}`)
+        if (this.networkLog.length > BrowserSession.CAPTURE_CAP) this.networkLog.shift()
+      })
       this.page.on('response', (r) => {
-        this.networkLog.push(`${r.status()} ${r.url()}`)
+        this.networkLog.push(`${r.status()} ${sanitizeUrl(r.url())}`)
+        if (this.networkLog.length > BrowserSession.CAPTURE_CAP) this.networkLog.shift()
+      })
+      this.page.on('requestfailed', (r) => {
+        this.networkLog.push(`<no-response> ${sanitizeUrl(r.url())}`)
         if (this.networkLog.length > BrowserSession.CAPTURE_CAP) this.networkLog.shift()
       })
       this.startError = null
@@ -579,7 +653,9 @@ export class BrowserSession {
       await page.evaluate('new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))').catch(() => undefined)
       return {
         title: await page.title(),
-        url: resp?.url() ?? params.url,
+        // R-11: sanitize the resolved URL so a signed/token-carrying redirect
+        // target never leaks into the model context.
+        url: sanitizeUrl(resp?.url() ?? params.url),
         status: resp?.status() ?? null,
       }
     } catch (err) {
@@ -600,7 +676,7 @@ export class BrowserSession {
       await waitForLocator(locator, this.actionTimeoutMs)
       await locator.first().click()
       await page.waitForLoadState('load').catch(() => undefined)
-      return { success: true, newUrl: page.url() || before }
+      return { success: true, newUrl: sanitizeUrl(page.url() || before) }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
@@ -636,7 +712,7 @@ export class BrowserSession {
     const page = this.requirePage()
     await page.waitForLoadState('load').catch(() => undefined)
     await page.evaluate('new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))').catch(() => undefined)
-    return { title: await page.title(), url: resp?.url() ?? fallbackUrl, status: resp?.status() ?? null }
+    return { title: await page.title(), url: sanitizeUrl(resp?.url() ?? fallbackUrl), status: resp?.status() ?? null }
   }
 
   async back(): Promise<NavigationResult> {
@@ -751,7 +827,10 @@ export class BrowserSession {
         await ctx.addCookies(params.cookies).catch(() => undefined)
       }
       const cookies = await ctx.cookies()
-      return { cookies }
+      // Redact cookie values by default so auth state never leaks into the
+      // model context; `readValues: true` is the explicit opt-in (P1-04).
+      const readValues = params.readValues === true
+      return { cookies: cookies.map((c) => ({ ...c, value: cookieValue(c.value, readValues) })) }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
@@ -823,7 +902,16 @@ export class BrowserSession {
 
     const single = async (): Promise<CaptureSegmentsResult> => {
       const buf = await page.screenshot({ type, quality })
-      return { buffers: [buf], truncated: false, segmentsTotal: 1, captured: 1, capturedWidth: vpW, capturedHeight: vpH, pageWidth: vpW, pageHeight: vpH }
+      // Even when not tiling, report the page's real scrollable extent (not the
+      // viewport size) so callers/agents see how much content exists (P1-09).
+      const size = await page.evaluate<{ w: number; h: number }>(
+        '({ w: Math.max(document.body.scrollWidth, document.documentElement.scrollWidth), h: Math.max(document.body.scrollHeight, document.documentElement.scrollHeight) })',
+      ).catch(() => ({ w: 0, h: 0 }))
+      return {
+        buffers: [buf], truncated: false, segmentsTotal: 1, captured: 1,
+        capturedWidth: vpW, capturedHeight: vpH,
+        pageWidth: size.w || vpW, pageHeight: size.h || vpH,
+      }
     }
 
     // No tiling requested → single viewport capture.
@@ -912,7 +1000,7 @@ export class BrowserSession {
         if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true })
       }
       writeFileSync(outPath, buf)
-      return { url: page.url(), path: outPath, bytes: buf.length }
+      return { url: sanitizeUrl(page.url()), path: outPath, bytes: buf.length }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
@@ -973,9 +1061,9 @@ export class BrowserSession {
           ].join(',');
           const seen = new Set();
           const nodes = [];
+          let totalMatching = 0;
           const all = document.querySelectorAll(selector);
           for (const el of all) {
-            if (nodes.length >= MAX) break;
             const rect = el.getBoundingClientRect();
             if (rect.width === 0 && rect.height === 0) continue;
             const tag = el.tagName.toLowerCase();
@@ -990,6 +1078,8 @@ export class BrowserSession {
             const key = tag + '|' + role + '|' + name + '|' + Math.round(rect.x) + '|' + Math.round(rect.y);
             if (seen.has(key)) continue;
             seen.add(key);
+            totalMatching += 1;
+            if (nodes.length >= MAX) continue;
             const node = {
               index: nodes.length + 1,
               role, name: name.slice(0, 160), tag,
@@ -1004,10 +1094,14 @@ export class BrowserSession {
             if (el.checked !== undefined) node.checked = el.checked === true;
             nodes.push(node);
           }
-          return nodes;
+          return { nodes, total: totalMatching, truncated: totalMatching > nodes.length };
         })()`,
-      )) ?? []
-      return { nodes: nodes as SnapshotNode[] }
+      )) ?? { nodes: [] }
+      const raw = (typeof nodes === 'object' && nodes && 'nodes' in nodes && Array.isArray((nodes as { nodes: SnapshotNode[] }).nodes))
+        ? (nodes as { nodes: SnapshotNode[]; total?: number; truncated?: boolean })
+        : { nodes: nodes as SnapshotNode[], total: undefined, truncated: undefined }
+      const out = raw.nodes.map((n) => (n.href ? { ...n, href: sanitizeUrl(n.href) } : n))
+      return { nodes: out, ...(raw.total !== undefined ? { total: raw.total } : {}), ...(raw.truncated !== undefined ? { truncated: raw.truncated } : {}) }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))

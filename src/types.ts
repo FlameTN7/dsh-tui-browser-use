@@ -63,8 +63,8 @@ export type VisionMode = 'auto' | 'on' | 'off' | 'deepseek-file-api'
 /** How a screenshot is transferred to the model. */
 export type ImageTransfer = 'file' | 'base64' | 'url' | 'none'
 
-/** Accepted screenshot output formats. */
-export type ScreenshotFormat = 'jpeg' | 'webp' | 'png'
+/** Accepted screenshot output formats (Playwright only emits jpeg/png; webp was removed — it silently produced jpeg). */
+export type ScreenshotFormat = 'jpeg' | 'png'
 
 /** Tiling mode. */
 export type TilingMode = 'auto' | 'on' | 'off'
@@ -86,9 +86,9 @@ export interface ProviderOverride {
 /** Screenshot configuration block. */
 export interface ScreenshotConfig {
   format: ScreenshotFormat
-  /** JPEG/WebP quality, 1-100. */
+  /** JPEG quality, 1-100. */
   quality: number
-  /** `width×height` string, e.g. `1024x768`. */
+  /** @deprecated `width×height` string. Real viewport is now `viewport`; kept as a backward-compat alias. */
   maxDimension: string
 }
 
@@ -104,6 +104,8 @@ export interface TilingConfig {
 /** Plugin config, validated by the Schemastery `Config` schema in index.ts. */
 export interface BrowserUseConfig {
   visionMode: VisionMode
+  /** Effective viewport in CSS pixels (was `screenshot.maxDimension`; the deprecated alias still works). */
+  viewport?: { width: number; height: number }
   screenshot: ScreenshotConfig
   tiling: TilingConfig
   providers: ProviderOverride[]
@@ -137,6 +139,10 @@ export interface ScreenshotResult {
   elementSummary: string
   /** DeepSeek file_api `file_id` when the official file path was used. */
   fileId: string
+  /** True when a vision model actually read the screenshot (P1-07/08). */
+  visionUsed?: boolean
+  /** Why vision was skipped, when `visionUsed` is false (e.g. `vision-off`, `vision-unavailable`). */
+  visionUnavailableReason?: string
   /** Tiling: total tiles that would cover the whole page (1 when not tiled). */
   tilesTotal?: number
   /** Tiling: tiles actually captured (≤ `tilesTotal`). */
@@ -268,6 +274,8 @@ export interface CookiesParams {
   clear?: boolean
   /** Cookies to add before returning (set `name`/`value`, optional `url`/`domain`/`path`). */
   cookies?: Array<{ name: string; value: string; url?: string; domain?: string; path?: string }>
+  /** Read cookie VALUES (default false — values are masked as `***` so auth state never leaks). */
+  readValues?: boolean
 }
 
 /** `browser.cookies` result. */
@@ -400,6 +408,10 @@ export interface SnapshotParams {
 /** `browser.snapshot` result. */
 export interface SnapshotResult {
   nodes: SnapshotNode[]
+  /** Total matching visible candidates ahead of the node cap (P1-09). */
+  total?: number
+  /** True when the page had more candidates than the `maxNodes` cap (P1-09). */
+  truncated?: boolean
 }
 
 // ── Vision pipeline shared types ─────────────────────────────────────────
