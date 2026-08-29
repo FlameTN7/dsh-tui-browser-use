@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Pure-function gate (no browser/key needed)
+        run: npm run check
+      - name: Pure-logic regression
+        run: npm run test:logic
+
+  # Browser-dependent integration. Playwright browsers are not cached across
+  # jobs; install chromium + system deps once, then run the focused scripts.
+  browser:
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # Cache the Playwright browser download so re-runs skip the ~150MB fetch.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+      # R-11: set the launch binary env so the container-register / integration
+      # scripts pick a real Chromium even when Playwright's default channel
+      # resolution differs by runner.
+      - name: Build
+        run: npm run build
+      - name: Browser integration
+        env:
+          DSH_TUI_BROWSER_EXECUTABLE: /opt/chromium-1148/chrome-linux/chrome
+        run: node --import tsx/esm scripts/browser-integration.ts
+      - name: Container register check
+        env:
+          DSH_TUI_BROWSER_EXECUTABLE: /opt/chromium-1148/chrome-linux/chrome
+        run: node scripts/container-register-check.mjs
