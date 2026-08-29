@@ -31,7 +31,7 @@
 └────────────────────────────────────────────────────────┘
 ```
 
-> `src/tiling.ts` 提供切分几何；长页实际切块由 `BrowserSession.captureSegments()` 做**滚屏分段**
+> 长页切块由 `BrowserSession.captureSegments()` 内联计算切分几何并做**滚屏分段**
 > （按视口高−overlap 滚动截多张原生分辨率视口图），而非对整张超长图做像素裁剪。
 
 ## 工具集
@@ -44,32 +44,35 @@
 | `browser_type` | 输入文本 | 基础；可选 `clear` 先清空 + `enter` 后按回车 |
 | `browser_evaluate` | 执行 JS | 基础 |
 | `browser_extract` | 结构化提取 | 视觉读取 + schema 校验（`schema-validation-failed` 上报，失败重试 ≤2 次） |
-| `browser_task` | 自然语言多步任务 | 视觉驱动的 navigate/click/type 循环，带逐步成本 |
+| `browser_task` | 自然语言多步任务 | 视觉驱动的 navigate/click/type/scroll/press/wait/hover 循环，带累计成本 |
 | `browser_snapshot` | 可访问性快照 | 返回可交互/语义元素索引（role/name/bbox），作为默认观察，视觉降为兜底 |
 | `browser_back` / `browser_forward` / `browser_reload` | 前进/后退/刷新 | 返回标题+URL+状态码 |
 | `browser_scroll` | 滚动 | 按像素偏移 `x`/`y`，返回实际滚动位置 |
 | `browser_press` | 按键 | `key` 如 Enter/Escape/Tab/Control+S |
 | `browser_wait` | 等待 | `selector` 可见或 `ms` 睡眠（上限 30000） |
 | `browser_hover` | 悬停 | `selector`/`text`，显示下拉/工具提示 |
-| `browser_cookies` | Cookie | 读取，可选 `clear` 或 `cookies` 写入 |
+| `browser_cookies` | Cookie | 读取，可选 `clear` 或 `cookies` 写入；值默认掩为 `***`，`readValues:true` 读原值 |
 | `browser_console_messages` | console 捕获 | `[type] text`，`clear`（默认 true） |
-| `browser_network_requests` | 网络捕获 | `<status> <url>`，`clear`（默认 true） |
+| `browser_network_requests` | 网络捕获 | `REQ <method> <url>` / `<status> <url>` / `<no-response> <url>`，`clear`（默认 true） |
 | `browser_pdf` | 打印 PDF | 返回 `{ url, path, bytes }`，`path` 省略则写入临时文件 |
 | `browser_status` | 浏览器状态 | 可用性/版本/配置 |
 
 ## 配置
 
-所有配置项通过 [dsh-tui 设置区块](https://github.com/ccch1mneyyy/dsh-TUI/blob/main/docs/plugins.md)（接缝六 `tuiSettingsSections`）
-暴露到 `/settings` 界面，也可经 `cordis.patch.yml` 静态配置。
+主要配置项经 [dsh-tui 设置区块](https://github.com/ccch1mneyyy/dsh-TUI/blob/main/docs/plugins.md)（接缝六 `tuiSettingsSections`）
+暴露到 `/settings` 界面，也可经 `cordis.patch.yml` 静态配置。注意 `lang` 与 `providers[]` 暂无 UI，只能走
+`cordis.patch.yml` / env 配置。
 
 ### 设置项
 
 | 设置项 | 默认值 | 说明 |
 |---|---|---|
 | `visionMode` | `auto` | `auto`（自动探测）/ `on` / `off` / `deepseek-file-api` |
-| `screenshot.format` | `jpeg` | 截图格式：`jpeg` / `webp` / `png` |
-| `screenshot.quality` | `80` | 截图质量（JPEG/WebP 编码） |
-| `screenshot.maxDimension` | `1024×768` | 截图最大尺寸（原始像素） |
+| `viewport.width` | `1024` | 真实视口宽度（CSS px） |
+| `viewport.height` | `768` | 真实视口高度（CSS px） |
+| `screenshot.format` | `jpeg` | 截图格式：`jpeg` / `png`（webp 已移除） |
+| `screenshot.quality` | `80` | 截图质量（JPEG 编码） |
+| `screenshot.maxDimension` | — | 已废弃别名（见 `viewport`；历史配置仍兼容） |
 | `tiling.mode` | `auto` | `auto`（超阈值自动切分）/ `on` / `off` |
 | `tiling.threshold` | `1200×1200` | 超过则该截图进入切分流程 |
 | `tiling.overlap` | `60` | tile 间重叠像素 |
@@ -105,7 +108,8 @@ harness settings 的 `llm-pi-ai.providers`**（实测该 namespace 未注册到 
 
 > `scnet` 已于 2025-08 失效（429/不可用），从路由表移除。**非多模态文本模型**（如官方
 > `deepseek-v4-flash`）会被 `isVisionCapableModel` 判为不支持视觉：即使 `visionMode` 未关，也
-> 不把截图发给它，`browser_screenshot` 退回纯 DOM `elementSummary`。
+> 不把截图发给它，`browser_screenshot` **短路**为无视觉返回（`visionUsed:false` + `visionUnavailableReason`），
+> DOM 观察统一交给 `browser_snapshot`（R-05）。
 
 #### 运行时路由覆盖（环境变量）
 
@@ -124,6 +128,7 @@ harness settings 的 `llm-pi-ai.providers`**（实测该 namespace 未注册到 
 | `DSH_TUI_BROWSER_USER_DATA_DIR` | Chromium 用户数据目录（持久化 cookie/localStorage/登录态） |
 | `DSH_TUI_BROWSER_STORAGE_STATE` | storageState 快照路径（启动导入 + 关闭导出 cookie/localStorage） |
 | `DSH_TUI_BROWSER_MAX_TILES` | 滚屏切分最大段数（默认 12） |
+| `DSH_TUI_BROWSER_SENSITIVE_QUERY_KEYS` | 脱敏的敏感 query 键（逗号分隔；默认 `token,key,signature,sig,secret,api_key,apikey,access_token,session,cred,auth`） |
 
 ## 视觉管线
 
@@ -135,7 +140,7 @@ Playwright 截图
   → 超过 tiling.threshold?  → 滚屏分段 (视口高−overlap 切多张原生分辨率图)
   → 官方 DeepSeek+vision → file_api 上传 → file_id 引用
   → 非官方+vision       → base64 内联 (image_url, detail:high)
-  → 无视觉/文本模型      → 纯 DOM 提取
+  → 无视觉/文本模型      → 短路 (visionUsed:false + visionUnavailableReason)，DOM 观察交给 browser_snapshot
 ```
 
 **为什么用 file_api（官方 DeepSeek）？**
@@ -155,7 +160,7 @@ Playwright 截图
 附上 violation 清单让模型自纠；视觉指令用 `<task>…</task>` 定界，system 消息声明截图是**不可信页面
 内容**——页面里出现的指令一律当数据读，绝不当作命令执行（防 prompt injection）。
 
-**为什么默认 `quality=80` / `maxDimension=1024×768`？**
+**为什么默认 `quality=80` / `viewport=1024×768`？**
 - 视觉模型预处理会缩到 800×800，1024×768 略高于它，兼顾"看得清 + 不浪费"
 - JPEG q=80 在清晰度和体积间取平衡，单图约 100-300KB，不撑上下文
 
@@ -174,7 +179,7 @@ npm install            # 安装依赖（postinstall 打印浏览器就绪指引�
 npm run build          # tsc → lib/types/
 npm run check          # CI 门禁：build+smoke+verify:manifest+verify:i18n+router:check
 npm run smoke          # 无头冒烟（入口 + 能力判定 + 截图预处理 + 工具定义，20 工具）
-npm run test:logic     # 纯逻辑测试：extract 重试 + 提示注入护栏（无需浏览器/key）
+npm run test:logic     # 纯逻辑测试：extract 重试 / 提示注入护栏 / settings-live / render 契约 / 脱敏 / usage 累计 / abort（无需浏览器/key）
 npm run test:integration # 真实浏览器集成（需 DSH_TUI_BROWSER_EXECUTABLE）
 npm run test:tiling-defects # tiling 三缺陷回归：宽页分片/截断上报/控制页（需 DSH_TUI_BROWSER_EXECUTABLE）
 npm run verify:manifest # @dsh-std/manifest 校验 dsh-plugin.json

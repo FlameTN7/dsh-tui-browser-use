@@ -31,7 +31,7 @@ A browser-use capability aligned with Claude Code, but natively adapted for the 
 └────────────────────────────────────────────────────────┘
 ```
 
-> `src/tiling.ts` provides the split geometry; tall-page splitting is done at runtime by
+> Tall-page splitting computes the split geometry inline in
 > `BrowserSession.captureSegments()` via **scroll-capture** (scroll and capture multiple
 > native-resolution viewport images at `viewport height − overlap`), rather than pixel-cropping
 > a single oversized image.
@@ -46,32 +46,35 @@ A browser-use capability aligned with Claude Code, but natively adapted for the 
 | `browser_type` | Type text | Basic; optional `clear` to empty first + `enter` to press a trailing key |
 | `browser_evaluate` | Execute JS | Basic |
 | `browser_extract` | Structured extraction | Vision read + schema validation (reports `schema-validation-failed`, retried ≤2 times) |
-| `browser_task` | Natural-language multi-step task | Vision-driven navigate/click/type loop with per-step cost |
+| `browser_task` | Natural-language multi-step task | Vision-driven navigate/click/type/scroll/press/wait/hover loop with cumulative cost |
 | `browser_snapshot` | Accessibility snapshot | Returns an indexed list of interactive/semantic elements (role/name/bbox) as the default observation; vision is the fallback |
 | `browser_back` / `browser_forward` / `browser_reload` | Back / forward / reload | Returns title + URL + status |
 | `browser_scroll` | Scroll | Pixel offset `x`/`y`, returns the resulting scroll position |
 | `browser_press` | Press a key | `key` like Enter/Escape/Tab/Control+S |
 | `browser_wait` | Wait | A `selector` becomes visible, or sleep `ms` (capped 30000) |
 | `browser_hover` | Hover | `selector`/`text`, reveals dropdowns/tooltips |
-| `browser_cookies` | Cookies | Read, optional `clear` or `cookies` to write |
+| `browser_cookies` | Cookies | Read, optional `clear` or `cookies` to write; values masked as `***` by default, `readValues:true` reads them |
 | `browser_console_messages` | Console capture | `[type] text`, `clear` (default true) |
-| `browser_network_requests` | Network capture | `<status> <url>`, `clear` (default true) |
+| `browser_network_requests` | Network capture | `REQ <method> <url>` / `<status> <url>` / `<no-response> <url>`, `clear` (default true) |
 | `browser_pdf` | Print to PDF | Returns `{ url, path, bytes }`; temp file when `path` omitted |
 | `browser_status` | Browser status | Availability / version / configuration |
 
 ## Configuration
 
-All config is exposed through the [dsh-tui settings section](https://github.com/ccch1mneyyy/dsh-TUI/blob/main/docs/plugins.md)
-(seam #6 `tuiSettingsSections`), and also configurable via `cordis.patch.yml`.
+The main config is exposed through the [dsh-tui settings section](https://github.com/ccch1mneyyy/dsh-TUI/blob/main/docs/plugins.md)
+(seam #6 `tuiSettingsSections`), and also configurable via `cordis.patch.yml`. Note `lang` and
+`providers[]` have no UI yet — configure them via `cordis.patch.yml` / env.
 
 ### Settings
 
 | Setting | Default | Description |
 |---|---|---|
 | `visionMode` | `auto` | `auto` (detect) / `on` / `off` / `deepseek-file-api` |
-| `screenshot.format` | `jpeg` | Screenshot format: `jpeg` / `webp` / `png` |
-| `screenshot.quality` | `80` | Screenshot quality (JPEG/WebP encoding) |
-| `screenshot.maxDimension` | `1024×768` | Max screenshot dimension (raw pixels) |
+| `viewport.width` | `1024` | Real viewport width (CSS px) |
+| `viewport.height` | `768` | Real viewport height (CSS px) |
+| `screenshot.format` | `jpeg` | Screenshot format: `jpeg` / `png` (webp removed) |
+| `screenshot.quality` | `80` | Screenshot quality (JPEG encoding) |
+| `screenshot.maxDimension` | — | Deprecated alias (see `viewport`; historical configs still accepted) |
 | `tiling.mode` | `auto` | `auto` (split when over threshold) / `on` / `off` |
 | `tiling.threshold` | `1200×1200` | Splits the screenshot if it exceeds this size |
 | `tiling.overlap` | `60` | Tile overlap pixels |
@@ -109,8 +112,9 @@ multi-modal routes. Production does **not** read `llm-pi-ai.providers` from harn
 
 > `scnet` is invalid since 2025-08 (429/unavailable) and was removed from the route table.
 > **Non-multi-modal text models** (e.g. official `deepseek-v4-flash`) are rejected by
-> `isVisionCapableModel`: even with `visionMode` on, `browser_screenshot` degrades to pure DOM
-> `elementSummary` instead of sending a screenshot to a model that cannot read it.
+> `isVisionCapableModel`: even with `visionMode` on, `browser_screenshot` short-circuits to a
+> no-vision result (`visionUsed:false` + `visionUnavailableReason`); DOM observation is unified
+> under `browser_snapshot` (R-05) instead of sending a screenshot to a model that cannot read it.
 
 #### Runtime route overrides (env vars)
 
@@ -129,6 +133,7 @@ multi-modal routes. Production does **not** read `llm-pi-ai.providers` from harn
 | `DSH_TUI_BROWSER_USER_DATA_DIR` | Chromium user data dir (persist cookies/localStorage/login across runs) |
 | `DSH_TUI_BROWSER_STORAGE_STATE` | storageState snapshot path (loaded on start, saved on close) |
 | `DSH_TUI_BROWSER_MAX_TILES` | Max scroll-capture tile count (default 12) |
+| `DSH_TUI_BROWSER_SENSITIVE_QUERY_KEYS` | Sensitive query keys to redact (comma-separated; default `token,key,signature,sig,secret,api_key,apikey,access_token,session,cred,auth`) |
 
 ## Vision pipeline
 
@@ -138,7 +143,7 @@ Playwright screenshot
   → exceeds tiling.threshold?  → scroll-capture split (viewport-h − overlap, native-res images)
   → official DeepSeek+vision  → file_api upload → file_id reference
   → non-official+vision       → base64 inline (image_url, detail:high)
-  → no vision / text model    → pure DOM extraction
+  → no vision / text model    → short-circuit (visionUsed:false + visionUnavailableReason); DOM observation via browser_snapshot
 ```
 
 **Why file_api (official DeepSeek)?**
@@ -162,7 +167,7 @@ self-correct. The vision instruction is framed with `<task>…</task>` and the s
 screenshot as untrusted page content — an instruction appearing *inside* the page is treated as data,
 never as a directive (defends against prompt injection).
 
-**Why default `quality=80` / `maxDimension=1024×768`?**
+**Why default `quality=80` / `viewport=1024×768`?**
 - The vision model pre-processes to 800×800; 1024×768 is slightly above it, balancing "readable + not wasteful"
 - JPEG q=80 balances clarity and size; single image ≈100-300KB, won't bloat context
 
@@ -180,7 +185,7 @@ npm install            # install dependencies (postinstall prints browser guidan
 npm run build          # tsc → lib/types/
 npm run check          # CI gate: build+smoke+verify:manifest+verify:i18n+router:check
 npm run smoke          # headless smoke (entry + capability + preprocess + tool defs, 20 tools)
-npm run test:logic     # pure-logic tests: extract retry + prompt-injection fencing (no browser/key)
+npm run test:logic     # pure-logic tests: extract retry / prompt-injection fencing / settings-live / render contract / redact / usage accumulate / abort (no browser/key)
 npm run test:integration # live browser integration (needs DSH_TUI_BROWSER_EXECUTABLE)
 npm run test:tiling-defects # tiling 3-defect regression: wide split/truncation/control (needs DSH_TUI_BROWSER_EXECUTABLE)
 npm run verify:manifest # @dsh-std/manifest validates dsh-plugin.json

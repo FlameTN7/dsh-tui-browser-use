@@ -1,3 +1,8 @@
+---
+name: browser-bridge
+description: Browser automation toolset (Playwright + vision) for dsh-tui agents. Prefer browser_snapshot to observe the DOM, browser_screenshot to read the visual page, browser_extract for schema-typed data, and browser_task for a multi-step goal.
+---
+
 # browser-bridge — Browser Automation Tools
 
 `dsh-tui-browser-use` gives the agent a browser-automation toolset driven by
@@ -46,8 +51,10 @@ All tools live in the `browser_*` namespace and return a unified envelope
 - Vision is **auto by default**: official DeepSeek uses the Files API
   (`file_id`), other providers inlined as base64 `image_url`, `detail: high`.
 - If the current provider has no vision endpoint (or `visionMode: off`),
-  `browser_screenshot` falls back to a DOM element summary instead of
-  visual insight.
+  `browser_screenshot` short-circuits to a no-vision result
+  (`visionUsed:false` + `visionUnavailableReason`). Observe the DOM with
+  `browser_snapshot` instead — it is the default way to see what is clickable
+  or typeable without a screenshot.
 - `detail: high` is mandatory for page screenshots — a `low` detail resizes to
   512×512 and makes text unreadable.
 - Only the **official DeepSeek** channel supports file-based image transfer;
@@ -66,12 +73,17 @@ All tools live in the `browser_*` namespace and return a unified envelope
 - `browser_extract` reads the page with the vision model and returns JSON that
   satisfies the provided schema; a mismatch reports `schema-validation-failed`.
   It needs vision (a provider key). `browser_task` runs a bounded
-  vision-driven loop of navigate/click/type actions toward a natural-language
-  instruction and reports the answer, step count, and cost.
-- Screenshots are compressed (JPEG/WebP q=80) and downsampled to
-  `maxDimension` before vision. Large pages that exceed the tiling threshold
-  carry a tile plan (geometry only; pixel cropping needs a codec and is
-  deferred).
+  vision-driven loop of navigate/click/type/scroll/press/wait/hover actions
+  toward a natural-language instruction and reports the answer, step count,
+  and cost.
+- Screenshots are compressed (JPEG q=80) against the real `viewport`
+  (`viewport.width`/`viewport.height`, default 1024×768; the old
+  `screenshot.maxDimension` is a deprecated alias). Large pages that exceed
+  the tiling threshold carry a tile plan (geometry only; pixel cropping needs
+  a codec and is deferred).
+- `browser_cookies` masks cookie values as `***` by default and reads them
+  only with `readValues:true`, so a page's auth state never leaks into the
+  model context.
 - TUI settings: the plugin's config is editable under `/settings` →
   **Browser Automation (browser-use)**. It can also be set via
   `cordis.patch.yml`.
