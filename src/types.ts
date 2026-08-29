@@ -99,6 +99,8 @@ export interface TilingConfig {
   threshold: string
   /** Tile overlap in pixels. */
   overlap: number
+  /** Max tiles captured before truncation. Lower than needed drops the page bottom. */
+  maxTiles?: number
 }
 
 /** Plugin config, validated by the Schemastery `Config` schema in index.ts. */
@@ -109,6 +111,8 @@ export interface BrowserUseConfig {
   screenshot: ScreenshotConfig
   tiling: TilingConfig
   providers: ProviderOverride[]
+  /** Optional HTTP proxy for external sites (`http://host:port`). Empty uses env `DSH_TUI_BROWSER_PROXY`. */
+  proxy?: string
 }
 
 // ── Tool contracts ───────────────────────────────────────────────────────
@@ -129,6 +133,8 @@ export interface NavigateResult {
 export interface ScreenshotParams {
   /** Optional instruction the vision model should focus on. */
   instruction?: string
+  /** Optional absolute path to write the captured screenshot (or first tile) to the workspace. */
+  savePath?: string
 }
 
 /** `browser.screenshot` result. */
@@ -153,6 +159,10 @@ export interface ScreenshotResult {
   capturedHeight?: number
   /** Full scrollable page height in px. */
   pageHeight?: number
+  /** Absolute path the screenshot was written to when `savePath` was provided (first/only tile). */
+  savedPath?: string
+  /** All tile paths written when `savePath` was provided and the page tiled into multiple files. */
+  savedPaths?: string[]
 }
 
 /** Result of a scroll-capture tiling pass over the page. */
@@ -303,6 +313,26 @@ export interface NetworkRequestsParams {
 /** `browser.network_requests` result. */
 export interface NetworkRequestsResult {
   requests: string[]
+}
+
+/** `browser.download` parameters. */
+export interface DownloadParams {
+  /** The URL to download (e.g. a file link the page exposed). */
+  url: string
+  /** Output path to write the downloaded bytes to. When omitted, writes to a temp file and returns its path. */
+  savePath?: string
+}
+
+/** `browser.download` result. */
+export interface DownloadResult {
+  /** The (sanitized) URL that was downloaded. */
+  url: string
+  /** Absolute path to the downloaded file. */
+  path: string
+  /** Size of the file in bytes. */
+  bytes: number
+  /** Optional Content-Type from the response. */
+  contentType?: string
 }
 
 /** `browser.pdf` parameters. */

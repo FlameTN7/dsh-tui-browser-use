@@ -92,6 +92,22 @@ export const dict: I18nDict = {
     zh: '相邻分段的重叠像素数，避免接缝处元素被切断。',
     en: 'Overlap pixels between adjacent segments, so seam elements are not cut off.',
   },
+  'settings.tiling.maxTiles.label': {
+    zh: '切分上限（段）',
+    en: 'Max tiles',
+  },
+  'settings.tiling.maxTiles.description': {
+    zh: '滚动分段截图的最大段数。超过时丢弃页面底部（并上报 tilesTruncated）。默认 24。',
+    en: 'Max scroll-capture segments. Past this the page bottom is dropped (with a tilesTruncated report). Default 24.',
+  },
+  'settings.proxy.label': {
+    zh: 'HTTP 代理',
+    en: 'HTTP proxy',
+  },
+  'settings.proxy.description': {
+    zh: '访问外网站点用的 HTTP 代理（如 http://127.0.0.1:10800）。留空则用环境变量 DSH_TUI_BROWSER_PROXY。',
+    en: 'HTTP proxy for external sites (e.g. http://127.0.0.1:10800). Empty falls back to env DSH_TUI_BROWSER_PROXY.',
+  },
   'tiling.truncated.note': {
     zh: '页面在第 {{captured}}/{{total}} 段后截断，还有 {{dropped}} 段未被采集，可见内容只到约 {{heightPx}}px 处，其下缺失。',
     en: 'The page was truncated after segment {{captured}} of {{total}}; {{dropped}} more segment(s) were not captured, so content is only readable down to roughly {{heightPx}}px and everything below is missing.',
@@ -117,6 +133,10 @@ export const dict: I18nDict = {
   'error.argument': {
     zh: '参数错误: {{message}}',
     en: 'Argument error: {{message}}',
+  },
+  'error.download': {
+    zh: '下载失败: {{message}}',
+    en: 'Download failed: {{message}}',
   },
 
   // ── screenshot insight ─────────────────────────────────────────────────

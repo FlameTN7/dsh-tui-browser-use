@@ -58,6 +58,7 @@ export const Config: Schema<Config> = Schema.object({
     mode: Schema.union(['auto', 'on', 'off'] as const).default('auto'),
     threshold: Schema.string().default('1200x1200'),
     overlap: Schema.number().min(0).default(60),
+    maxTiles: Schema.number().min(1).default(24),
   }),
   providers: Schema.array(Schema.object({
     provider: Schema.string().required(),
@@ -66,6 +67,9 @@ export const Config: Schema<Config> = Schema.object({
     maxImageBytes: Schema.number().required(false),
     detailPreference: Schema.union(['high', 'low', 'auto'] as const).required(false),
   })).default([]),
+  // Optional HTTP proxy for external sites. Empty falls back to the
+  // `DSH_TUI_BROWSER_PROXY` env var at browser startup.
+  proxy: Schema.string().required(false),
 })
 
 /**
@@ -88,6 +92,7 @@ const settingsNamespaceSchema = Schema.object({
     mode: Schema.union(['auto', 'on', 'off'] as const).default('auto'),
     threshold: Schema.string().default('1200x1200'),
     overlap: Schema.number().min(0).default(60),
+    maxTiles: Schema.number().min(1).default(24),
   }),
   providers: Schema.array(Schema.object({
     provider: Schema.string().required(),
@@ -96,6 +101,7 @@ const settingsNamespaceSchema = Schema.object({
     maxImageBytes: Schema.number().required(false),
     detailPreference: Schema.union(['high', 'low', 'auto'] as const).required(false),
   })).default([]),
+  proxy: Schema.string().required(false),
 })
 
 // ── Harness access helpers (structural, never self-manage secrets) ──────
@@ -223,6 +229,7 @@ function mergeConfig(base: BrowserUseConfig, layer: Partial<BrowserUseConfig>): 
     screenshot: { ...base.screenshot, ...(layer.screenshot ?? {}) },
     tiling: { ...base.tiling, ...(layer.tiling ?? {}) },
     providers: layer.providers ?? base.providers,
+    proxy: layer.proxy ?? base.proxy,
   }
 }
 
@@ -239,6 +246,7 @@ export function apply(ctx: Context, config: Config): void {
     screenshot: { ...config.screenshot },
     tiling: { ...config.tiling },
     providers: [...config.providers],
+    proxy: config.proxy,
   }
 
   // Resolve the vision request environment from the provider route table +
@@ -338,6 +346,7 @@ export function apply(ctx: Context, config: Config): void {
           screenshot: { ...config.screenshot },
           tiling: { ...config.tiling },
           providers: config.providers.map((p) => ({ ...p })),
+          proxy: config.proxy,
         }
         const scope = settings.register('browser-use', settingsNamespaceSchema, { base: configBase, applies: 'live' }) as
           { get?(): Partial<BrowserUseConfig>; watch?(cb: (v: Partial<BrowserUseConfig>) => void): void } | undefined
@@ -363,6 +372,7 @@ export function apply(ctx: Context, config: Config): void {
           session.config.screenshot = next.screenshot
           session.config.tiling = next.tiling
           session.config.providers = next.providers
+          session.config.proxy = next.proxy
           debug(`effective config applied (visionMode=${next.visionMode})`)
         }
         // Initial layer (settings.yaml) and every later /settings commit.

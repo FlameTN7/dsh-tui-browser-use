@@ -15,7 +15,7 @@
 import { existsSync, openSync, readSync, closeSync, statSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ErrorCode, NavigateParams, NavigateResult, ClickParams, ClickResult, TypeParams, TypeResult, EvaluateParams, EvaluateResult, ScreenshotParams, StatusResult, SnapshotParams, SnapshotNode, SnapshotResult, NavigationResult, ScrollParams, ScrollResult, PressParams, PressResult, WaitParams, WaitResult, HoverParams, HoverResult, CookiesParams, CookiesResult, ConsoleMessagesParams, ConsoleMessagesResult, NetworkRequestsParams, NetworkRequestsResult, PdfParams, PdfResult, I18nTemplate, BrowserUseConfig, CaptureSegmentsResult } from './types.js'
+import type { ErrorCode, NavigateParams, NavigateResult, ClickParams, ClickResult, TypeParams, TypeResult, EvaluateParams, EvaluateResult, ScreenshotParams, StatusResult, SnapshotParams, SnapshotNode, SnapshotResult, NavigationResult, ScrollParams, ScrollResult, PressParams, PressResult, WaitParams, WaitResult, HoverParams, HoverResult, CookiesParams, CookiesResult, ConsoleMessagesParams, ConsoleMessagesResult, NetworkRequestsParams, NetworkRequestsResult, PdfParams, PdfResult, DownloadParams, DownloadResult, I18nTemplate, BrowserUseConfig, CaptureSegmentsResult } from './types.js'
 import { t } from './i18n.js'
 
 // ── Structural Playwright types (no hard dependency) ─────────────────────
@@ -130,6 +130,19 @@ interface PwContext {
   cookies(urls?: string[]): Promise<PwCookie[]>
   addCookies(cookies: Array<{ name: string; value: string; url?: string; domain?: string; path?: string }>): Promise<void>
   clearCookies(): Promise<void>
+  /** API request handle, used by `browser_download` to carry session cookies/auth. */
+  request: PwApiRequestContext
+}
+
+interface PwApiResponse {
+  ok(): boolean
+  status(): number
+  body(): Promise<Buffer>
+  headers(): Record<string, string>
+}
+
+interface PwApiRequestContext {
+  get(url: string, opts?: { timeout?: number }): Promise<PwApiResponse>
 }
 
 interface PwBrowser {
@@ -191,13 +204,14 @@ function engineLaunchArgs(engine: 'chromium' | 'firefox' | 'webkit'): string[] {
 
 /**
  * Optional HTTP proxy for the browser when the container must reach external
- * sites through a host proxy. Set `DSH_TUI_BROWSER_PROXY=http://host:port`.
+ * sites through a host proxy. Prefers the plugin config `proxy` (a `/settings`
+ * panel edit), then the `DSH_TUI_BROWSER_PROXY=http://host:port` env var.
  * Localhost / loopback are always bypassed so the proxy does not hijack local
  * pages, tests, or same-host services; `DSH_TUI_BROWSER_PROXY_BYPASS` overrides
  * the bypass list (comma-separated). Empty/absent means direct connect.
  */
-function browserProxy(): { server: string; bypass?: string } | undefined {
-  const v = process.env.DSH_TUI_BROWSER_PROXY
+function browserProxy(cfgProxy?: string): { server: string; bypass?: string } | undefined {
+  const v = cfgProxy && cfgProxy.length > 0 ? cfgProxy : process.env.DSH_TUI_BROWSER_PROXY
   if (!v || v.length === 0) return undefined
   const bypass = process.env.DSH_TUI_BROWSER_PROXY_BYPASS ??
     'localhost,127.0.0.1,::1,10.0.8.1'
@@ -524,7 +538,7 @@ export class BrowserSession {
       return false
     }
     try {
-      const proxy = browserProxy()
+      const proxy = browserProxy(this.config.proxy)
       const engine = browserEngine()
       // Non-chromium engines (firefox/webkit): use the bundled binary, no
       // channel/executable probe (they don't ship per-engine system channels).
@@ -942,7 +956,7 @@ export class BrowserSession {
     // under the maxTiles cap: filling a whole band (all columns) before moving
     // down means truncation drops the BOTTOM of the page (the same semantic as a
     // tall page), never an entire right-hand column while a band is half-read.
-    const maxTiles = envNum('DSH_TUI_BROWSER_MAX_TILES', 12)
+    const maxTiles = this.config.tiling.maxTiles ?? envNum('DSH_TUI_BROWSER_MAX_TILES', 12)
     const neededCols = pageW > vpW ? Math.ceil((pageW - vpW) / stepX) + 1 : 1
     const neededRows = pageH > vpH ? Math.ceil((pageH - vpH) / stepY) + 1 : 1
     const segmentsTotal = neededCols * neededRows
@@ -1005,6 +1019,70 @@ export class BrowserSession {
       const msg = err instanceof Error ? err.message : String(err)
       throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
     }
+  }
+
+  /**
+   * Download a file from a URL and write it to disk. Uses the page's request
+   * context so cookies/auth from the current session carry over (e.g. a
+   * signed download link the page just exposed). `path` is written as-is (when
+   * omitted a temp file is used); the result reports the absolute path and byte
+   * size so the agent can hand the artifact off.
+   */
+  async download(params: DownloadParams): Promise<DownloadResult> {
+    if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
+    const context = this.requireContext()
+    const url = sanitizeUrl(params.url)
+    try {
+      const resp = await context.request.get(url, { timeout: this.navTimeoutMs })
+      if (!resp.ok()) {
+        throw new BrowserToolError('browser-error', t('error.download', this.lang, { message: `HTTP ${resp.status()}` }))
+      }
+      const buf = await resp.body()
+      let outPath = params.savePath ?? ''
+      if (!outPath) {
+        outPath = join(tmpdir(), `browser-use-${Date.now()}.bin`)
+      } else {
+        const dir = outPath.slice(0, Math.max(outPath.lastIndexOf('/'), outPath.lastIndexOf('\\')) + 1)
+        if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true })
+      }
+      writeFileSync(outPath, buf)
+      return {
+        url,
+        path: outPath,
+        bytes: buf.length,
+        contentType: resp.headers()['content-type'],
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
+    }
+  }
+
+  /**
+   * Write captured screenshot buffers to disk. A single buffer goes to
+   * `savePath` verbatim; multiple tiled buffers are written as
+   * `<stem>-<i>.<ext>` beside it (never clobbering each other). Returns the
+   * absolute paths written (first + all). The page is NOT re-captured — the
+   * caller passes the buffers it already captured.
+   */
+  async saveScreenshots(buffers: Buffer[], savePath: string, format: string): Promise<{ savedPath: string; savedPaths: string[] }> {
+    if (!buffers.length) throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: 'no screenshot buffers to save' }))
+    const ext = format === 'png' ? 'png' : 'jpg'
+    const outDir = savePath.slice(0, Math.max(savePath.lastIndexOf('/'), savePath.lastIndexOf('\\')) + 1)
+    if (outDir && !existsSync(outDir)) mkdirSync(outDir, { recursive: true })
+    const saved: string[] = []
+    if (buffers.length === 1) {
+      writeFileSync(savePath, buffers[0]!)
+      return { savedPath: savePath, savedPaths: [savePath] }
+    }
+    // Multiple tiles: write `name-1.ext`, `name-2.ext`, ... beside `savePath`.
+    const stem = savePath.slice(0, savePath.lastIndexOf('.')) || savePath
+    buffers.forEach((buf, i) => {
+      const p = `${stem}-${i + 1}.${ext}`
+      writeFileSync(p, buf)
+      saved.push(p)
+    })
+    return { savedPath: saved[0] ?? '', savedPaths: saved }
   }
 
   /**

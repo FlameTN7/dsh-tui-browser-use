@@ -175,6 +175,24 @@ export function registerSettingsSection(ctx: { get(name: string, optional?: bool
         hintDescriptions: d('settings.tiling.overlap.description'),
         kind: 'number',
       },
+      {
+        path: ['tiling', 'maxTiles'],
+        label: d('settings.tiling.maxTiles.label')?.en ?? 'Max tiles',
+        descriptions: d('settings.tiling.maxTiles.label'),
+        hint: d('settings.tiling.maxTiles.description')?.en,
+        hintDescriptions: d('settings.tiling.maxTiles.description'),
+        kind: 'number',
+        placeholder: '24',
+      },
+      {
+        path: ['proxy'],
+        label: d('settings.proxy.label')?.en ?? 'HTTP proxy',
+        descriptions: d('settings.proxy.label'),
+        hint: d('settings.proxy.description')?.en,
+        hintDescriptions: d('settings.proxy.description'),
+        kind: 'text',
+        placeholder: 'http://127.0.0.1:10800',
+      },
     ],
   }
 

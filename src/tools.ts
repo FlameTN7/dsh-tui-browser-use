@@ -23,6 +23,7 @@ import type {
   HoverParams, HoverResult, CookiesParams, CookiesResult,
   ConsoleMessagesParams, ConsoleMessagesResult, NetworkRequestsParams, NetworkRequestsResult,
   PdfParams, PdfResult,
+  DownloadParams, DownloadResult,
   ResultEnvelope, Usage, ErrorCode, PreparedImage,
 } from './types.js'
 import { t, type Lang } from './i18n.js'
@@ -205,6 +206,8 @@ interface PreparedCapture {
   captured: number
   capturedHeight: number
   pageHeight: number
+  /** Raw captured buffers (pre-prepare), for a `savePath` hand-off. */
+  buffers: Buffer[]
 }
 
 /**
@@ -252,6 +255,7 @@ async function capturePreparedImages(session: BrowserSession, lang: Lang): Promi
     captured: cap.captured,
     capturedHeight: cap.capturedHeight,
     pageHeight: cap.pageHeight,
+    buffers: cap.buffers,
   }
 }
 
@@ -328,9 +332,10 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
 
     {
       name: 'browser_screenshot',
-      description: 'Capture the current page and, when vision is available, read it with a vision model. Returns visual insight, a compact element summary, and (for the official DeepSeek file path) the file_id.',
+      description: 'Capture the current page and, when vision is available, read it with a vision model. Returns visual insight, a compact element summary, and (for the official DeepSeek file path) the file_id. When savePath is set, writes the captured screenshot (or first tile) to that absolute path.',
       parameters: objSchema({
         instruction: { type: 'string', description: 'Optional instruction for the vision model, e.g. "read all link text".' },
+        savePath: { type: 'string', description: 'Optional absolute path to write the screenshot to the workspace (only the first tile when the page is tiled).' },
       }),
       output: { schema: envelopeSchema(), render: renderUntrusted },
       timeoutMs: 60_000,
@@ -344,7 +349,8 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
           // elementSummary path that duplicated browser_snapshot.
           const env = await deps.resolveVisionEnv()
           const visionActive = deps.visionMode() !== 'off' && env !== null
-          if (!visionActive) {
+          const wantsSave = Boolean(p.savePath)
+          if (!visionActive && !wantsSave) {
             // R-05 (option A): with vision off/unavailable, do NOT run the
             // redundant DOM elementSummary (which duplicated browser_snapshot).
             // DOM observation is unified under browser_snapshot; screenshot
@@ -366,23 +372,35 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
           const cap = await capturePreparedImages(session, lang)
           let insight = ''
           let fileId = ''
-          if (cap.images.length > 0) {
+          if (visionActive && cap.images.length > 0) {
             const { analyzeImages } = await import('./vision.js')
             const instruction = [p.instruction, cap.tilingNote].filter(Boolean).join(' ')
             const res = await analyzeImages(env, cap.images, instruction || undefined, abortSignalOf(exec, 60_000))
             insight = res.insight || t('screenshot.insight.empty', lang)
             fileId = cap.images[0]?.fileId ?? ''
           }
+          // Save the screenshot to a user-supplied workspace path. This runs
+          // even when vision is unavailable (a bare screenshot hand-off), using
+          // the buffers we already captured — no re-capture.
+          let savedPath: string | undefined
+          let savedPaths: string[] | undefined
+          if (p.savePath) {
+            const saved = await session.saveScreenshots(cap.buffers, p.savePath, session.config.screenshot.format)
+            savedPath = saved.savedPath
+            savedPaths = saved.savedPaths
+          }
           return ok({
             visualInsight: insight,
             elementSummary: '',
             fileId,
-            visionUsed: true,
+            visionUsed: visionActive,
             tilesTotal: cap.segmentsTotal,
             tilesCaptured: cap.captured,
             tilesTruncated: cap.truncated,
             capturedHeight: cap.capturedHeight,
             pageHeight: cap.pageHeight,
+            savedPath,
+            savedPaths,
           })
         } catch (err) { return fail(err) }
       },
@@ -780,6 +798,25 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         const p = (args ?? {}) as PdfParams
         try {
           return ok(await session.pdf(p))
+        } catch (err) { return fail(err) }
+      },
+    },
+
+    {
+      name: 'browser_download',
+      description: "Download a file from a URL and write it to disk. Uses the session's request context so cookies/auth carry over. Returns the absolute path, byte size, and Content-Type.",
+      parameters: objSchema({
+        url: { type: 'string', description: 'The URL to download (e.g. a file link the page exposed).' },
+        savePath: { type: 'string', description: 'Output path to write the downloaded bytes (optional; defaults to a temp file).' },
+      }, ['url']),
+      output: { schema: envelopeSchema(), render: renderText },
+      timeoutMs: 60_000,
+      isConcurrencySafe: () => false,
+      async execute(args: unknown): Promise<ResultEnvelope<DownloadResult>> {
+        const p = (args ?? {}) as DownloadParams
+        if (!p.url) return fail(t('error.argument', lang, { message: 'url required' }))
+        try {
+          return ok(await session.download(p))
         } catch (err) { return fail(err) }
       },
     },
