@@ -4,16 +4,17 @@
 
 > 给 dsh-tui 的 agent 装上"看得见网页"的浏览器自动化工具。
 
-**dsh-tui-browser-use** 是 [dsh-tui](https://github.com/ccch1mneyyy/dsh-TUI) 的子插件（Cordis 插件），随 `dsh --profile dsh-tui` 组合加载。它向 agent 注册 **21 个 `browser_*` 工具**，用 [Playwright](https://playwright.dev/) 驱动真实浏览器，并原生适配DeepSeek视觉模型理解截图。
+**dsh-tui-browser-use** 是 [dsh-tui](https://github.com/ccch1mneyyy/dsh-TUI) 的子插件（Cordis 插件），随 `dsh --profile dsh-tui` 组合加载。它向 agent 注册 **21 个 `browser_*` 工具**，用 [Playwright](https://playwright.dev/) 驱动真实浏览器，并原生适配DeepSeek视觉模型理解截图，返回经 schema 校验的结构化结果。
 
-## 功能简介
+## 功能特色
 
 - **21 个工具**：浏览、交互、观察、结构化提取、自然语言多步任务、文件下载等。
 - **视觉理解**：DeepSeek Files API（官方）或 OpenAI 兼容 base64 两种传输；
 长页自动滚屏分段、宽页分片、截断上报（超级拼装是针对DeepSeek官方识图后端严格压缩适配的，采取了以token换精度的做法）。
 - **会话能力**：会话档案与登录态管理（`session.mode` 持久化 / isolated 独立、锁文件防并发、冲突自动降级为独立临时档案、整目录可打包迁移），弹窗策略、串行互斥、导航/动作/收敛三类超时。
 - **文件交互**：`browser_screenshot.savePath` 截图落盘、`browser_download` 带会话 cookie 下载文件。
-- **安全策略**：视觉提示注入防护（`<task>` 定界，截图视为不可信内容）、URL/敏感 query/cookie 脱敏、无沙箱参数按需门控。
+- **安全默认**：视觉提示注入防护（`<task>` 定界，截图视为不可信内容）、URL/敏感 query/cookie 脱敏、无沙箱参数按需门控。
+- **三引擎**：chromium（默认）/ firefox / webkit，配置可进 dsh-tui `/settings` 面板修改。
 
 ## 架构
 
@@ -37,6 +38,8 @@
 │    └── src/settings-section.ts 注册 /settings 设置区块     │
 └────────────────────────────────────────────────────────┘
 ```
+
+长页切分由 `BrowserSession.captureSegments()` 按 `视口高 − overlap` **滚屏分段**截多张原生分辨率视口图，宽页再按 `视口宽 − overlap` 分列；超过 `tiling.maxTiles` 时结果透出 `tilesTruncated` 等元数据。
 
 ## 工具一览
 
@@ -67,6 +70,7 @@ npx playwright install chromium --with-deps   # Linux；Windows/macOS 去掉 --w
         visionMode: 'auto'
 ```
 
+`postinstall` 会检测系统 Chrome / Playwright Chromium，缺失时输出可复制的安装命令；也可用 `DSH_TUI_BROWSER_EXECUTABLE` 直接指向已有 Chromium。浏览器缺失时工具返回 `browser-error` + 修复指引，不静默崩溃。
 
 ### 视觉 API key（可选，建议配置）
 
@@ -91,6 +95,8 @@ config:
 - `browser_status` 的 `value.session` 回显运行期真实生效的脱敏档案信息；`config.session` 仅当配置了 `session` 块时出现。`session.mode` 改动需重启会话生效。
 
 ### 常用环境变量
+
+部分变量注册到TUI的Settings界面下可供快速调整
 
 | 变量 | 说明 |
 |---|---|
@@ -118,6 +124,9 @@ Playwright 截图
   → 无视觉模型 → 短路（visionUsed:false + visionUnavailableReason）
 ```
 
+- **Files API**：使用DeepSeek官方视觉模型时，截图上传一次可多次引用，请求体不随 base64 膨胀且更易于命中缓存；文件默认 24h 过期（`DSH_TUI_BROWSER_FILE_EXPIRES_SECONDS` 可调），同一截图按内容复用 file_id。
+- **可靠性**：视觉请求 429/5xx 指数退避重试；`browser_extract` schema 校验失败重试 ≤2 次并附 violation 清单。
+- **提示注入防护**：视觉指令用 `<task>…</task>` 定界，system 消息声明截图是不可信页面内容，页内指令一律按数据处理。
 
 ## 构建与验证
 
