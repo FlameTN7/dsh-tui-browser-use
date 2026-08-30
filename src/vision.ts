@@ -16,6 +16,7 @@
 
 import { createHash } from 'node:crypto'
 import type { ImageTransfer, PreparedImage, Usage, VisionMode } from './types.js'
+import { FileIdCache, fileIdScopeKey } from './file-id-cache.js'
 
 /** Resolved vision request environment. */
 export interface VisionEnv {
@@ -130,26 +131,25 @@ function fileExpiresSeconds(): number | null {
 // Reuse one file_id per distinct image payload so repeated requests carrying the
 // same screenshot hit DeepSeek's disk cache: the `file_id` is a stable token in
 // the prompt prefix, while a freshly uploaded `file_id` never matches a cached
-// prefix and base64 inline content changes with every capture. Bounded so a long
-// session cannot leak memory unboundedly.
-const MAX_CACHED_FILE_IDS = 64
-const fileIdCache = new Map<string, string>() // contentHash → file_id
+// prefix and base64 inline content changes with every capture. The cache is
+// SCOPED by endpoint/provider/model + a credential fingerprint so switching
+// transports never reuses a file_id from another platform or account, bounded
+// per scope (64) and globally (8 scopes, LRU) so a long session cannot leak
+// memory unboundedly.
+const fileIdCache = new FileIdCache()
 
 async function reusableFileId(env: VisionEnv, image: PreparedImage, baseUrl: string, signal?: AbortSignal): Promise<string> {
   if (image.fileId) return image.fileId
   const hash = createHash('sha256').update(image.data).digest('hex')
-  const hit = fileIdCache.get(hash)
+  const scopeKey = fileIdScopeKey(baseUrl, env.provider, env.model, env.apiKey)
+  const hit = fileIdCache.get(scopeKey, hash)
   if (hit) {
     image.fileId = hit
     return hit
   }
   const fileId = await uploadFile(env, image, baseUrl, signal)
   image.fileId = fileId
-  fileIdCache.set(hash, fileId)
-  if (fileIdCache.size > MAX_CACHED_FILE_IDS) {
-    const oldest = fileIdCache.keys().next().value
-    if (oldest !== undefined) fileIdCache.delete(oldest)
-  }
+  fileIdCache.set(scopeKey, hash, fileId)
   return fileId
 }
 
