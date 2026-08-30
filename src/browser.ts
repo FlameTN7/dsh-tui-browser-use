@@ -246,7 +246,6 @@ async function resolveFrameAware(page: PwPage, selector?: string, text?: string)
   return main
 }
 
-/**
 // ── Structural config helpers ────────────────────────────────────────────
 
 /**
@@ -443,6 +442,14 @@ export class BrowserSession {
     // edit to `session.mode`/`session.profile` is honoured the next time the
     // browser is actually started (matching the proxy restart semantics).
     this.sessionPaths = resolveSession(this.config, this.env)
+    // Reset the per-attempt flags before re-evaluating the lock below; a stale
+    // `true` from a previous attempt must never leak into this one.
+    this.sessionLocked = false
+    this.degraded = false
+    // Whether THIS attempt acquired the persistent lock (not inherited from an
+    // earlier attempt). Only a lock this attempt acquired may be released on a
+    // failed start — a lock-conflict fallback owns no lock.
+    let lockAcquiredHere = false
     // Persistent mode: acquire the profile lock so two processes cannot share a
     // profile (B5). On conflict we DEGRADE to an isolated session rather than
     // hanging — reported via `status().session.degraded`. The paths are reset to
@@ -452,11 +459,10 @@ export class BrowserSession {
       const lock = acquireLock(this.sessionPaths.lockPath)
       if (lock.held) {
         this.sessionLocked = true
-        this.degraded = false
+        lockAcquiredHere = true
       } else {
         this.degraded = true
         this.sessionPaths = degradeToIsolated(this.sessionPaths)
-        this.sessionLocked = false
       }
     }
     // Lazy-create the user-data dir (B6): profiles are only materialised on the
@@ -472,39 +478,49 @@ export class BrowserSession {
       userDataDir: this.sessionPaths.userDataDir,
       storageStatePath: this.sessionPaths.storageStatePath,
     }
-    const started = await this.driver.start({
-      config: this.config,
-      env: startEnv,
-      lang: this.lang,
-      handlers: {
-        onConsole: (m) => {
-          this.consoleLog.push(`[${m.type()}] ${m.text()}`)
-          if (this.consoleLog.length > BrowserSession.CAPTURE_CAP) this.consoleLog.shift()
+    let started: boolean
+    try {
+      started = await this.driver.start({
+        config: this.config,
+        env: startEnv,
+        lang: this.lang,
+        handlers: {
+          onConsole: (m) => {
+            this.consoleLog.push(`[${m.type()}] ${m.text()}`)
+            if (this.consoleLog.length > BrowserSession.CAPTURE_CAP) this.consoleLog.shift()
+          },
+          onRequest: (r) => {
+            this.networkLog.push(`REQ ${r.method()} ${sanitizeUrl(r.url(), this.env.sensitiveQueryKeys)}`)
+            if (this.networkLog.length > BrowserSession.CAPTURE_CAP) this.networkLog.shift()
+          },
+          onResponse: (r) => {
+            this.networkLog.push(`${r.status()} ${sanitizeUrl(r.url(), this.env.sensitiveQueryKeys)}`)
+            if (this.networkLog.length > BrowserSession.CAPTURE_CAP) this.networkLog.shift()
+          },
+          onRequestFailed: (r) => {
+            this.networkLog.push(`<no-response> ${sanitizeUrl(r.url(), this.env.sensitiveQueryKeys)}`)
+            if (this.networkLog.length > BrowserSession.CAPTURE_CAP) this.networkLog.shift()
+          },
         },
-        onRequest: (r) => {
-          this.networkLog.push(`REQ ${r.method()} ${sanitizeUrl(r.url(), this.env.sensitiveQueryKeys)}`)
-          if (this.networkLog.length > BrowserSession.CAPTURE_CAP) this.networkLog.shift()
-        },
-        onResponse: (r) => {
-          this.networkLog.push(`${r.status()} ${sanitizeUrl(r.url(), this.env.sensitiveQueryKeys)}`)
-          if (this.networkLog.length > BrowserSession.CAPTURE_CAP) this.networkLog.shift()
-        },
-        onRequestFailed: (r) => {
-          this.networkLog.push(`<no-response> ${sanitizeUrl(r.url(), this.env.sensitiveQueryKeys)}`)
-          if (this.networkLog.length > BrowserSession.CAPTURE_CAP) this.networkLog.shift()
-        },
-      },
-    })
+      })
+    } catch (err) {
+      // The driver contract says `start` returns false rather than throwing, but
+      // a third-party driver may still throw. Treat it as a failed start and
+      // surface the reason instead of leaking the exception past `ensureStarted`.
+      this.startError = `browser-launch-failed:${err instanceof Error ? err.message : String(err)}`
+      started = false
+    }
     if (!started) {
-      this.startError = this.driver.startError ?? t('error.browser-missing', this.lang)
-      // Release the lock acquired above (P1-1): a failed start must not
-      // poison later attempts — otherwise the next ensureStarted() sees its
-      // own live PID in the lock and degrades to isolated forever.
-      if (this.sessionLocked && this.sessionPaths.lockPath) {
+      this.startError = this.startError ?? this.driver.startError ?? t('error.browser-missing', this.lang)
+      // Release only a lock THIS attempt acquired (P1-1): a failed start must
+      // not poison later attempts — otherwise the next ensureStarted() sees its
+      // own live PID in the lock and degrades to isolated forever. On a real
+      // lock conflict we acquired nothing, and `degraded` must stay true so the
+      // failure report still explains the fallback correctly.
+      if (lockAcquiredHere && this.sessionPaths.lockPath) {
         releaseLock(this.sessionPaths.lockPath)
         this.sessionLocked = false
       }
-      this.degraded = false
       this.page = null
       this.ctx = null
       return false
