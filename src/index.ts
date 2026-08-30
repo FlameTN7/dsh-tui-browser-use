@@ -71,6 +71,14 @@ export const Config: Schema<Config> = Schema.object({
   // Optional HTTP proxy for external sites. Empty falls back to the
   // `DSH_TUI_BROWSER_PROXY` env var at browser startup.
   proxy: Schema.string().required(false),
+  // Session/profile management (Phase 3). Optional and absent by default, so
+  // existing deployments keep the historical fresh-session behaviour. When set,
+  // `mode` picks a managed profile; `profile` names the directory under the
+  // profile root (validated as one safe path segment).
+  session: Schema.object({
+    mode: Schema.union(['persistent', 'isolated'] as const).default('isolated'),
+    profile: Schema.string().default('default'),
+  }).required(false),
 })
 
 /**
@@ -103,6 +111,10 @@ const settingsNamespaceSchema = Schema.object({
     detailPreference: Schema.union(['high', 'low', 'auto'] as const).required(false),
   })).default([]),
   proxy: Schema.string().required(false),
+  session: Schema.object({
+    mode: Schema.union(['persistent', 'isolated'] as const).default('isolated'),
+    profile: Schema.string().default('default'),
+  }).required(false),
 })
 
 // ── Harness access helpers (structural, never self-manage secrets) ──────
@@ -226,6 +238,7 @@ function mergeConfig(base: BrowserUseConfig, layer: Partial<BrowserUseConfig>): 
     tiling: { ...base.tiling, ...(layer.tiling ?? {}) },
     providers: layer.providers ?? base.providers,
     proxy: layer.proxy ?? base.proxy,
+    session: layer.session ?? base.session,
   }
 }
 
@@ -243,6 +256,7 @@ export function apply(ctx: Context, config: Config): void {
     tiling: { ...config.tiling },
     providers: [...config.providers],
     proxy: config.proxy,
+    ...(config.session ? { session: { ...config.session } } : {}),
   }
 
   // Centralised runtime environment (the single place env vars are read). All
@@ -344,6 +358,7 @@ export function apply(ctx: Context, config: Config): void {
           tiling: { ...config.tiling },
           providers: config.providers.map((p) => ({ ...p })),
           proxy: config.proxy,
+          ...(config.session ? { session: { ...config.session } } : {}),
         }
         const scope = settings.register('browser-use', settingsNamespaceSchema, { base: configBase, applies: 'live' }) as
           { get?(): Partial<BrowserUseConfig>; watch?(cb: (v: Partial<BrowserUseConfig>) => void): void } | undefined
@@ -370,6 +385,7 @@ export function apply(ctx: Context, config: Config): void {
           session.config.tiling = next.tiling
           session.config.providers = next.providers
           session.config.proxy = next.proxy
+          session.config.session = next.session
           debug(`effective config applied (visionMode=${next.visionMode})`)
         }
         // Initial layer (settings.yaml) and every later /settings commit.

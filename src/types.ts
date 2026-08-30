@@ -69,6 +69,22 @@ export type ScreenshotFormat = 'jpeg' | 'png'
 /** Tiling mode. */
 export type TilingMode = 'auto' | 'on' | 'off'
 
+/** Browser login-state persistence mode (Phase 3). */
+export type SessionMode = 'persistent' | 'isolated'
+
+/** Session management configuration (Phase 3, 竞品 B5/B6). */
+export interface SessionConfig {
+  /**
+   * `persistent` keeps a fixed, named profile (cross-run login); `isolated`
+   * uses a fresh ephemeral profile each run and cleans it up. Absent → the
+   * `DSH_TUI_BROWSER_USER_DATA_DIR`/`_STORAGE_STATE` env vars are used
+   * directly (external, unmanaged) or a default fresh session.
+   */
+  mode: SessionMode
+  /** Named profile directory under the profile root (validated as one segment). */
+  profile: string
+}
+
 /** Per-provider capability override. */
 export interface ProviderOverride {
   /** Provider id, matched against `settings.describe()` / the model route. */
@@ -113,6 +129,8 @@ export interface BrowserUseConfig {
   providers: ProviderOverride[]
   /** Optional HTTP proxy for external sites (`http://host:port`). Empty uses env `DSH_TUI_BROWSER_PROXY`. */
   proxy?: string
+  /** Session/profile management (persistent vs isolated). Optional; absent is the historical default. */
+  session?: SessionConfig
 }
 
 // ── Tool contracts ───────────────────────────────────────────────────────
@@ -410,6 +428,15 @@ export interface StatusResult {
   available: boolean
   version: string
   config: BrowserUseConfig
+  /** Effective session/profile info (Phase 3). Present once session mgmt resolves a profile. */
+  session?: {
+    mode: SessionMode | 'external'
+    profile: string
+    /** Sanitized profile data dir (home redacted; never contains secrets). */
+    profileDir: string | null
+    /** Whether a persistent lock conflict degraded this run to an isolated session. */
+    degraded: boolean
+  }
 }
 
 /** One interactive/semantic element in the a11y snapshot index. */
