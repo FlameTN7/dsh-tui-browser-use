@@ -479,7 +479,7 @@ export interface SnapshotDelta {
   removed?: Array<{ id: number; role: string; name: string }>
   /** Nodes that appeared since the previous snapshot. */
   added?: SnapshotNode[]
-  /** Nodes still present whose content/attributes changed (position excluded). */
+  /** Nodes still present whose content/attributes changed (position included). */
   changed?: SnapshotNode[]
   /** Nodes still present whose positional index changed: `id`, `from`, `to`. */
   reindexed?: Array<{ id: number; from: number; to: number }>

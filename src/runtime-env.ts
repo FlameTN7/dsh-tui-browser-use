@@ -3,9 +3,11 @@
  *
  * AGENTS.md §2 / 竞品 B3: `BrowserSession` and the vision path must receive
  * their configuration through injection, not read `process.env` scattered
- * across modules. This module is the SINGLE place that reads the host
- * environment; everything else (browser / vision / provider-router / index)
- * consumes the resolved `RuntimeEnv` value object.
+ * across modules. This module is the primary place that reads the host
+ * environment for plugin config; everything else (browser / vision /
+ * provider-router / index) consumes the resolved `RuntimeEnv` value object.
+ * (A few path helpers outside this module still read platform env directly,
+ * e.g. `session-profiles` for the cache root — kept local for testability.)
  *
  * Semantics are deliberately IDENTICAL to the previous inline reads:
  *   - numeric overrides accept only a finite, non-negative value, else the

@@ -264,7 +264,6 @@ export function splitSaveStem(savePath: string): { dir: string; stem: string } {
   return { dir, stem }
 }
 
-/** Numeric env override helper: returns the parsed value or the fallback. */
 /** JPEG quality staircase steps (descending), never going above `base`, floor at 40. */
 function jpegQualitySteps(base: number): number[] {
   const b = Number.isFinite(base) && base > 0 ? base : 80
@@ -1130,7 +1129,7 @@ export class BrowserSession {
             if (el.checked !== undefined) node.checked = el.checked === true;
             nodes.push(node);
           }
-          // Content fingerprint (position excluded) to detect a "changed" node.
+          // Content fingerprint to detect a "changed" node (includes position).
           const fp = (n) => JSON.stringify([n.role, n.name, n.tag, n.type || '', n.disabled, n.checked, n.placeholder || '', n.href || '', n.x, n.y, n.width, n.height]);
           const prev = state.last || [];
           const prevById = new Map(prev.map((n) => [n.id, n]));

@@ -218,9 +218,10 @@ export interface BrowserDriver {
 
   // ── Navigation ─────────────────────────────────────────────────────────
   // Every navigation method accepts an optional AbortSignal so a wall-clock
-  // timeout can short-circuit a pre-dispatch (B8): the signal is checked BEFORE
-  // the operation is issued, and a navigation attaches its wait listener before
-  // dispatching so a fast navigation is never missed.
+  // timeout can short-circuit a pre-dispatch (B8): the signal is checked
+  // BEFORE the operation is issued. The Playwright implementation uses
+  // `domcontentloaded` + best-effort `load` wait; a fast navigation is
+  // naturally covered by the goto call itself.
   navigate(url: string, timeoutMs: number, signal?: AbortSignal): Promise<PwNavigation>
   goBack(timeoutMs: number, signal?: AbortSignal): Promise<PwNavigation>
   goForward(timeoutMs: number, signal?: AbortSignal): Promise<PwNavigation>

@@ -4,7 +4,7 @@
  *
  * Loads the REAL built plugin (`lib/types/index.js`) against a minimal harness
  * context that exposes the `tools` service, and verifies:
- *   1. `apply` runs and registers exactly the 8 `browser.*` tools.
+ *   1. `apply` runs and registers exactly the 21 `browser.*` tools.
  *   2. `browser.status` actually launches a browser (via the executable probe)
  *      and reports `available: true` with a Chromium version.
  *
