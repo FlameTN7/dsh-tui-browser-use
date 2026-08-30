@@ -191,7 +191,7 @@ export function registerSettingsSection(ctx: { get(name: string, optional?: bool
         hint: d('settings.proxy.description')?.en,
         hintDescriptions: d('settings.proxy.description'),
         kind: 'text',
-        placeholder: 'http://127.0.0.1:10800',
+        placeholder: 'http://host:port',
       },
     ],
   }

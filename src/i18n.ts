@@ -105,8 +105,8 @@ export const dict: I18nDict = {
     en: 'HTTP proxy',
   },
   'settings.proxy.description': {
-    zh: '访问外网站点用的 HTTP 代理（如 http://127.0.0.1:10800）。留空则用环境变量 DSH_TUI_BROWSER_PROXY。',
-    en: 'HTTP proxy for external sites (e.g. http://127.0.0.1:10800). Empty falls back to env DSH_TUI_BROWSER_PROXY.',
+    zh: '访问外网站点用的 HTTP 代理（如 http://host:port）。留空则用环境变量 DSH_TUI_BROWSER_PROXY。',
+    en: 'HTTP proxy for external sites (e.g. http://host:port). Empty falls back to env DSH_TUI_BROWSER_PROXY.',
   },
   'tiling.truncated.note': {
     zh: '页面在第 {{captured}}/{{total}} 段后截断，还有 {{dropped}} 段未被采集，可见内容只到约 {{heightPx}}px 处，其下缺失。',

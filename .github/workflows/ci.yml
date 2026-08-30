@@ -39,10 +39,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-playwright-
       # R-11: install Playwright Chromium so the integration scripts use a real
-      # browser. No container-specific executable env is set here — the scripts
-      # fall back to Playwright's bundled Chromium via the default channel.
-      # Real container regressions set DSH_TUI_BROWSER_EXECUTABLE=/opt/chromium-1148/...
-      # locally (see docs/handover-live-readiness.zh.md §10).
+      # browser. No executable env is set here — the scripts fall back to
+      # Playwright's bundled Chromium via the default channel. Local regressions
+      # can point at a custom browser with DSH_TUI_BROWSER_EXECUTABLE=/path/to/chrome.
       - name: Install Playwright Chromium
         run: npx playwright install chromium --with-deps
       - name: Build
