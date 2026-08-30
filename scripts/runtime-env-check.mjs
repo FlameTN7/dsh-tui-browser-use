@@ -1,9 +1,10 @@
 /**
  * runtime-env-check — pure-logic regression for Phase 2.3.
  *
- * `runtime-env.ts` is the SINGLE place this plugin reads `process.env`. It must
- * centralise every `DSH_TUI_*` override with the SAME defaults/validation as the
- * previous scattered reads, so a behaviour-identical refactor stays verified:
+ * `runtime-env.ts` is the primary place this plugin reads `process.env` for
+ * plugin configuration. It must centralise every `DSH_TUI_*` override with the
+ * SAME defaults/validation as the previous scattered reads, so a
+ * behaviour-identical refactor stays verified:
  *   - numeric overrides accept only finite, non-negative values → fallback;
  *   - enum overrides fall back to the safe default (chromium / dismiss);
  *   - file-expiry special-cases 0/empty/negative → permanent (null).

@@ -133,7 +133,7 @@ Playwright screenshot
 ```sh
 npm run build           # tsc → lib/types/
 npm run check           # CI gate: build + smoke(21 tools) + manifest + i18n + router
-npm run test:logic      # 16 pure-logic regression suites (no browser/key; incl. session profiles / snapshot delta / driver contract / runtime env)
+npm run test:logic      # 17 pure-logic regression suites (no browser/key; incl. session profiles / start-failure lock release / snapshot delta / driver contract / runtime env)
 npm run test:container  # stub harness loads the artifact + real browser boot (21 tools)
 npm run test:integration # live browser integration (navigate/click/type/screenshot/tiling/snapshot)
 ```
