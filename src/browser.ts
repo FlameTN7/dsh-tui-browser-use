@@ -18,6 +18,7 @@ import { join } from 'node:path'
 import type { ErrorCode, NavigateParams, NavigateResult, ClickParams, ClickResult, TypeParams, TypeResult, EvaluateParams, EvaluateResult, ScreenshotParams, StatusResult, SnapshotParams, SnapshotNode, SnapshotResult, NavigationResult, ScrollParams, ScrollResult, PressParams, PressResult, WaitParams, WaitResult, HoverParams, HoverResult, CookiesParams, CookiesResult, ConsoleMessagesParams, ConsoleMessagesResult, NetworkRequestsParams, NetworkRequestsResult, PdfParams, PdfResult, DownloadParams, DownloadResult, I18nTemplate, BrowserUseConfig, CaptureSegmentsResult } from './types.js'
 import { t } from './i18n.js'
 import { effectiveViewport } from './capabilities.js'
+import { requestUrl, displayUrl } from './download-url.js'
 
 // ── Structural Playwright types (no hard dependency) ─────────────────────
 
@@ -138,6 +139,7 @@ interface PwContext {
 interface PwApiResponse {
   ok(): boolean
   status(): number
+  url(): string
   body(): Promise<Buffer>
   headers(): Record<string, string>
 }
@@ -1036,7 +1038,9 @@ export class BrowserSession {
   async download(params: DownloadParams): Promise<DownloadResult> {
     if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
     const context = this.requireContext()
-    const url = sanitizeUrl(params.url)
+    // Request the RAW URL (a signed/token URL must not be scrubbed) — only the
+    // displayed URL is sanitized so a secret never leaks into the model context.
+    const url = requestUrl(params.url)
     try {
       const resp = await context.request.get(url, { timeout: this.navTimeoutMs })
       if (!resp.ok()) {
@@ -1052,7 +1056,7 @@ export class BrowserSession {
       }
       writeFileSync(outPath, buf)
       return {
-        url,
+        url: displayUrl(params.url, resp.url() ?? params.url),
         path: outPath,
         bytes: buf.length,
         contentType: resp.headers()['content-type'],
