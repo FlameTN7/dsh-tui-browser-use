@@ -26,9 +26,6 @@ const engine = process.env.DSH_TUI_BROWSER_ENGINE ?? 'chromium'
 
 async function main() {
   const { BrowserSession } = await import(entry)
-  if (engine !== 'chromium' && !process.env.DSH_TUI_BROWSER_EXECUTABLE) {
-    process.env.DSH_TUI_BROWSER_EXECUTABLE = process.env.DSH_TUI_BROWSER_EXECUTABLE ?? '/opt/chromium-1148/chrome-linux/chrome'
-  }
 
   const dir = mkdtempSync(join(tmpdir(), 'engine-'))
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>引擎页</title></head><body>

@@ -1,34 +1,26 @@
 #!/usr/bin/env bash
-# Start the real container dsh-tui with dsh-tui-browser-use mounted.
+# Start a local dsh-tui profile with dsh-tui-browser-use mounted.
 #
-# Why this script: manually pasting the multi-line node invocation keeps getting
-# truncated at the `\` line-continuations. This encapsulates the exact command so
-# you only run one line:
+# Usage:
+#   DSH_HOME=$HOME/.dsh DSH_BIN=$(command -v dsh) bash scripts/start-tui.sh
 #
-#   bash scripts/start-tui.sh
-#
-# It launches the dsh-tui profile under $DSH_HOME (the container's own home, NOT
-# the host production /root/.dsh) with a TTY shim so dsh-tui's stdout gate passes.
+# dsh-tui requires an interactive stdout, so this script injects a small TTY
+# shim via --require before booting the profile.
 
 set -euo pipefail
 
-# The container's dsh home. This script is for the CONTAINER (/opt/dsh-home);
-# it refuses to run against the host production /root/.dsh. Only an explicit
-# DSH_HOME=... overrides it.
-if [ "${DSH_HOME:-}" = "/root/.dsh" ]; then
-  echo "[start-tui] Refusing to run against host production DSH_HOME=/root/.dsh" >&2
-  echo "[start-tui] Pass DSH_HOME=/opt/dsh-home (the container home) explicitly." >&2
+# Resolve the dsh home and binary from the environment; fail loudly instead of
+# guessing, so the script never touches an unintended profile.
+: "${DSH_HOME:?Set DSH_HOME to the dsh profile home you want to launch}"
+DSH_BIN="${DSH_BIN:-$(command -v dsh || true)}"
+if [ -z "${DSH_BIN:-}" ] || [ ! -f "$DSH_BIN" ]; then
+  echo "[start-tui] ERROR: dsh binary not found" >&2
+  echo "[start-tui] Set DSH_BIN=/path/to/dsh (or put dsh on PATH)." >&2
   exit 1
 fi
-export DSH_HOME="${DSH_HOME:-/opt/dsh-home}"
 
-# The container's dsh bin (never the host PATH dsh, which may point at /root/.dsh).
-DSH_BIN="${DSH_BIN:-/root/.nvm/versions/node/v24.19.0/lib/node_modules/@deepseek-ai/dsh/lib/bin.js}"
-if ! [ -f "$DSH_BIN" ]; then
-  echo "[start-tui] ERROR: dsh bin not found at $DSH_BIN" >&2
-  echo "[start-tui] Set DSH_BIN=/path/to/the/container/dsh/bin.js" >&2
-  exit 1
-fi
+# Profile name can be overridden; default matches the plugin's host profile.
+PROFILE="${DSH_TUI_PROFILE:-dsh-tui}"
 
 # TTY shim so dsh-tui (which requires an interactive stdout) boots. If absent,
 # write it on the fly.
@@ -43,13 +35,7 @@ for (const s of [process.stdout, process.stderr, process.stdin]) {
 PRELOAD
 fi
 
-if [ ! -f "$DSH_BIN" ]; then
-  echo "[start-tui] ERROR: dsh bin not found at $DSH_BIN" >&2
-  echo "[start-tui] Set DSH_BIN=/path/to/dsh-bin.js" >&2
-  exit 1
-fi
-
-echo "[start-tui] DSH_HOME=$DSH_HOME  bin=$DSH_BIN" >&2
+echo "[start-tui] DSH_HOME=$DSH_HOME  bin=$DSH_BIN  profile=$PROFILE" >&2
 echo "[start-tui] Launching interactive dsh-tui (Ctrl-C to exit)." >&2
 
-exec node --require "$FAKE_TTY" "$DSH_BIN" --profile dsh-tui "$@"
+exec node --require "$FAKE_TTY" "$DSH_BIN" --profile "$PROFILE" "$@"

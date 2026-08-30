@@ -24,7 +24,6 @@ const log = (...a) => process.stderr.write('[iframe] ' + a.join(' ') + '\n')
 
 async function main() {
   const { BrowserSession } = await import(entry)
-  process.env.DSH_TUI_BROWSER_EXECUTABLE = process.env.DSH_TUI_BROWSER_EXECUTABLE ?? '/opt/chromium-1148/chrome-linux/chrome'
 
   const dir = join(tmpdir(), 'iframe-check-' + Date.now())
   mkdirSync(dir, { recursive: true })

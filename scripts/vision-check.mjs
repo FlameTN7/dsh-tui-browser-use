@@ -25,6 +25,7 @@ const log = (...a) => process.stderr.write('[vision] ' + a.join(' ') + '\n')
 
 /** Find the DEEPSEEK_API_KEY from the running dsh-tui process's environ. */
 function dshApiKey() {
+  if (process.env.DEEPSEEK_API_KEY) return process.env.DEEPSEEK_API_KEY
   for (const pid of readdirSync('/proc')) {
     if (!/^\d+$/.test(pid)) continue
     try {

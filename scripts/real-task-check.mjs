@@ -21,6 +21,7 @@ const entry = join(root, 'lib/types/index.js') + '?t=' + Date.now()
 const log = (...a) => process.stderr.write('[real-task] ' + a.join(' ') + '\n')
 
 async function dshApiKey() {
+  if (process.env.DEEPSEEK_API_KEY) return process.env.DEEPSEEK_API_KEY
   for (const pid of readdirSync('/proc').filter((d) => /^\d+$/.test(d))) {
     try {
       const cmd = readFileSync(`/proc/${pid}/cmdline`, 'utf8')
@@ -36,7 +37,6 @@ async function dshApiKey() {
 async function main() {
   const key = await dshApiKey()
   if (!key) { console.error('[real-task] ERROR: no DEEPSEEK_API_KEY'); process.exit(2) }
-  process.env.DSH_TUI_BROWSER_EXECUTABLE = process.env.DSH_TUI_BROWSER_EXECUTABLE ?? '/opt/chromium-1148/chrome-linux/chrome'
 
   const mod = await import(entry)
   const plugin = mod.default ?? mod

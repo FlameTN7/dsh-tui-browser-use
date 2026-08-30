@@ -3,7 +3,7 @@
  * dsh-tui-browser-use — real external multi-step browser_task on a proxied site.
  *
  * Drives the registered `browser_task` tool against `https://duckduckgo.com`
- * through the host proxy (most external sites are gated; see AGENTS.md §12).
+ * through an HTTP proxy (most external sites need one).
  * The vision-driven loop: navigate → screenshot → model reads the search box →
  * type "Playwright" → read the page. Uses `tiling:'off'` so the screengrab is a
  * single first-viewport capture (fewer tokens per step).
@@ -20,9 +20,10 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const entry = join(root, 'lib/types/index.js') + '?t=' + Date.now()
 const log = (...a) => process.stderr.write('[real-task-ddg] ' + a.join(' ') + '\n')
 
-process.env.DSH_TUI_BROWSER_PROXY = process.env.DSH_TUI_BROWSER_PROXY ?? 'http://127.0.0.1:10800'
+const PROXY = process.env.DSH_TUI_BROWSER_PROXY
 
 async function dshApiKey() {
+  if (process.env.DEEPSEEK_API_KEY) return process.env.DEEPSEEK_API_KEY
   for (const pid of readdirSync('/proc').filter((d) => /^\d+$/.test(d))) {
     try {
       const cmd = readFileSync(`/proc/${pid}/cmdline`, 'utf8')
@@ -38,7 +39,8 @@ async function dshApiKey() {
 async function main() {
   const key = await dshApiKey()
   if (!key) { console.error('[real-task-ddg] ERROR: no DEEPSEEK_API_KEY'); process.exit(2) }
-  process.env.DSH_TUI_BROWSER_EXECUTABLE = process.env.DSH_TUI_BROWSER_EXECUTABLE ?? '/opt/chromium-1148/chrome-linux/chrome'
+  if (!PROXY) { console.error('[real-task-ddg] ERROR: set DSH_TUI_BROWSER_PROXY to an HTTP proxy'); process.exit(2) }
+  process.env.DSH_TUI_BROWSER_PROXY = PROXY
 
   const mod = await import(entry)
   const plugin = mod.default ?? mod

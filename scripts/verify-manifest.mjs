@@ -34,19 +34,20 @@ async function loadFirst(specifiers) {
 }
 
 async function main() {
+  const dshTuiDir = process.env.DSH_TUI_DIR
   const manifestSpecifiers = [
     'file://' + join(root, 'node_modules/@dsh-std/manifest/lib/index.js'),
-    'file:///opt/opencode-workspace/dsh-tui/vendor/dsh-std/packages/manifest/lib/index.js',
+    ...(dshTuiDir
+      ? ['file://' + join(dshTuiDir, 'vendor/dsh-std/packages/manifest/lib/index.js')]
+      : []),
   ]
   const dshStdManifest = await loadFirst(manifestSpecifiers)
   if (!dshStdManifest) {
-    console.error('[verify-manifest] FAILED: @dsh-std/manifest not found (run pnpm install or set up dsh-tui vendored checkout)')
+    console.error('[verify-manifest] FAILED: @dsh-std/manifest not found (run npm install, or set DSH_TUI_DIR to a vendored dsh-tui checkout)')
     process.exit(1)
   }
-
-  const dshTuiDir = process.env.DSH_TUI_DIR ?? '/opt/opencode-workspace/dsh-tui'
   let dshTui = null
-  if (existsSync(join(dshTuiDir, 'src/plugin-spec/registry.ts'))) {
+  if (dshTuiDir && existsSync(join(dshTuiDir, 'src/plugin-spec/registry.ts'))) {
     try {
       const registryMod = await import(
         pathToFileURL(join(dshTuiDir, 'src/plugin-spec/registry.ts')).href

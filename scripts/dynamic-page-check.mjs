@@ -27,7 +27,6 @@ const log = (...a) => process.stderr.write('[dynamic] ' + a.join(' ') + '\n')
 
 async function main() {
   const { BrowserSession } = await import(entry)
-  process.env.DSH_TUI_BROWSER_EXECUTABLE = process.env.DSH_TUI_BROWSER_EXECUTABLE ?? '/opt/chromium-1148/chrome-linux/chrome'
 
   const dir = mkdtempSync(join(tmpdir(), 'dyn-'))
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>动态页</title></head><body>

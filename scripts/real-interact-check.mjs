@@ -2,11 +2,10 @@
 /**
  * dsh-tui-browser-use — real external-site type/click interaction (with proxy).
  *
- * The container can reach only a few external sites directly (example.com);
- * most are gated behind the host proxy reachable at 127.0.0.1:10800. This check
+ * Most external sites are only reachable through an HTTP proxy. This check
  * drives `browser_navigate`/`browser_type`/`browser_click` against a real site
- * that needs the proxy. It reads `DSH_TUI_BROWSER_PROXY` (or falls back to the
- * known 127.0.0.1:10800 host proxy) and wires it to the browser launch.
+ * that needs the proxy. It requires `DSH_TUI_BROWSER_PROXY` and wires it into
+ * the browser launch.
  *
  * Usage: node scripts/real-interact-check.mjs
  */
@@ -19,12 +18,11 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const entry = join(root, 'lib/types/index.js') + '?t=' + Date.now()
 const log = (...a) => process.stderr.write('[real-interact] ' + a.join(' ') + '\n')
 
-// The container reaches most external sites only through the host proxy.
-const PROXY = process.env.DSH_TUI_BROWSER_PROXY ?? 'http://127.0.0.1:10800'
+const PROXY = process.env.DSH_TUI_BROWSER_PROXY
 
 async function main() {
+  if (!PROXY) { console.error('[real-interact] ERROR: set DSH_TUI_BROWSER_PROXY to an HTTP proxy'); process.exit(2) }
   process.env.DSH_TUI_BROWSER_PROXY = PROXY
-  process.env.DSH_TUI_BROWSER_EXECUTABLE = process.env.DSH_TUI_BROWSER_EXECUTABLE ?? '/opt/chromium-1148/chrome-linux/chrome'
 
   const mod = await import(entry)
   const plugin = mod.default ?? mod

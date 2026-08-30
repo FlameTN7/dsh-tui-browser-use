@@ -11,7 +11,7 @@
  * Playwright's bundled Chromium.
  *
  * Usage:
- *   DSH_TUI_BROWSER_EXECUTABLE=/opt/chromium-1148/chrome-linux/chrome \
+ *   DSH_TUI_BROWSER_EXECUTABLE=/path/to/chrome \
  *     node --import tsx/esm scripts/browser-integration.ts
  */
 
