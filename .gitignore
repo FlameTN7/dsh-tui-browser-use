@@ -13,5 +13,4 @@ node_modules/
 
 # Internal agent / working-process docs (local only, never committed)
 AGENTS.md
-docs/handover-*.zh.md
-docs/review-handover-*.zh.md
+docs/
