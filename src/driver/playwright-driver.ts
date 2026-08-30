@@ -15,6 +15,7 @@
  */
 
 import { existsSync, readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import type { RuntimeEnv } from '../runtime-env.js'
 import { effectiveViewport } from '../capabilities.js'
@@ -103,8 +104,36 @@ export class PlaywrightDriver implements BrowserDriver {
     }
   }
 
+  /**
+   * Windows App Paths registry probe (plan 2.1): `reg query` the per-user and
+   * machine-wide App Paths keys for chrome/chromium and take the resolved
+   * executable when it is a real PE binary. Only runs on win32; a missing
+   * key or a non-native path is silently skipped.
+   */
+  private windowsAppPaths(): string | undefined {
+    if (process.platform !== 'win32') return undefined
+    const keys = [
+      'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\chrome.exe',
+      'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\chromium.exe',
+      'HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\chrome.exe',
+      'HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\chromium.exe',
+    ]
+    for (const key of keys) {
+      try {
+        const out = execFileSync('reg', ['query', key, '/ve'], { encoding: 'utf8', timeout: 2000 })
+        const m = /REG_SZ\s+(.+)$/m.exec(out)
+        const p = m?.[1]?.trim()
+        if (p && existsSync(p) && isRealBrowserBinary(p)) return p
+      } catch { /* key missing or query failed */ }
+    }
+    return undefined
+  }
+
   private resolveExecutablePath(env: RuntimeEnv): string | undefined {
     if (env.executablePath) return env.executablePath
+    // Windows: App Paths registry first (most reliable install location).
+    const fromAppPaths = this.windowsAppPaths()
+    if (fromAppPaths) return fromAppPaths
     const candidates = [
       '/usr/bin/chromium',
       '/usr/bin/chromium-browser',
