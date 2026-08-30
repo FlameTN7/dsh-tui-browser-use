@@ -18,7 +18,7 @@ const { PlaywrightDriver } = await import('../src/driver/playwright-driver.js')
 const METHODS = [
   'start', 'close', 'version',
   'navigate', 'goBack', 'goForward', 'reload',
-  'waitLoad', 'settleRaf', 'title', 'url', 'eval',
+  'waitLoad', 'settleRaf', 'settleStable', 'title', 'url', 'eval',
   'scrollTo', 'scrollBy', 'scrollPos', 'keyboardPress', 'screenshot', 'pdf',
   'resolveFrameAware', 'waitForLocator', 'clickLocator', 'hoverLocator', 'fillLocator', 'clearLocator',
   'cookies', 'clearCookies', 'addCookies', 'requestGet',
@@ -66,6 +66,7 @@ const ACCESSORS = ['startError', 'running', 'page', 'context']
     reload: async () => null,
     waitLoad: async () => {},
     settleRaf: async () => {},
+    settleStable: async () => {},
     title: async () => '',
     url: () => '',
     eval: async () => undefined,

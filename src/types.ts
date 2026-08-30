@@ -191,12 +191,16 @@ export interface ClickParams {
   selector?: string
   /** Visible text to locate the element. Mutually exclusive with `selector`. */
   text?: string
+  /** Return a short page-change delta (`added/changed/removed/reindexed`) from before the click (default false). */
+  delta?: boolean
 }
 
 /** `browser.click` result. */
 export interface ClickResult {
   success: boolean
   newUrl: string
+  /** Short page-change delta when `delta` was requested (page-derived, untrusted). */
+  delta?: SnapshotDelta
 }
 
 /** `browser.type` parameters. */
@@ -207,11 +211,15 @@ export interface TypeParams {
   enter?: string
   /** Clear the field before filling; default off. */
   clear?: boolean
+  /** Return a short page-change delta (`added/changed/removed/reindexed`) from before the type (default false). */
+  delta?: boolean
 }
 
 /** `browser.type` result. */
 export interface TypeResult {
   success: boolean
+  /** Short page-change delta when `delta` was requested (page-derived, untrusted). */
+  delta?: SnapshotDelta
 }
 
 /** Shared shape for the navigation trio (back/forward/reload). */
@@ -227,12 +235,16 @@ export interface ScrollParams {
   x?: number
   /** Vertical scroll delta in CSS pixels (default 0). */
   y?: number
+  /** Return a short page-change delta (`added/changed/removed/reindexed`) from before the scroll (default false). */
+  delta?: boolean
 }
 
 /** `browser.scroll` result. */
 export interface ScrollResult {
   x: number
   y: number
+  /** Short page-change delta when `delta` was requested (page-derived, untrusted). */
+  delta?: SnapshotDelta
 }
 
 /** `browser.press` parameters. */
@@ -402,6 +414,8 @@ export interface StatusResult {
 
 /** One interactive/semantic element in the a11y snapshot index. */
 export interface SnapshotNode {
+  /** Stable page-internal id (persistent across `browser_snapshot` calls within the same document). */
+  id: number
   /** Stable 1-based index the agent can reference. */
   index: number
   /** Computed ARIA role (link/button/heading/checkbox/textbox/...). */
@@ -429,10 +443,29 @@ export interface SnapshotNode {
   height: number
 }
 
+/**
+ * A short page-change delta between two snapshots, keyed by stable node `id`.
+ * Each list is capped and empty when nothing of that kind changed.
+ */
+export interface SnapshotDelta {
+  /** Nodes present in the previous snapshot but absent now. */
+  removed?: Array<{ id: number; role: string; name: string }>
+  /** Nodes that appeared since the previous snapshot. */
+  added?: SnapshotNode[]
+  /** Nodes still present whose content/attributes changed (position excluded). */
+  changed?: SnapshotNode[]
+  /** Nodes still present whose positional index changed: `id`, `from`, `to`. */
+  reindexed?: Array<{ id: number; from: number; to: number }>
+  /** True when any list was capped (the reported ceiling holds). */
+  truncated?: boolean
+}
+
 /** `browser.snapshot` parameters. */
 export interface SnapshotParams {
   /** Max nodes to return (default 200, capped at 500). */
   maxNodes?: number
+  /** Return a page-change delta relative to the previous snapshot (default false). */
+  delta?: boolean
 }
 
 /** `browser.snapshot` result. */
@@ -442,6 +475,8 @@ export interface SnapshotResult {
   total?: number
   /** True when the page had more candidates than the `maxNodes` cap (P1-09). */
   truncated?: boolean
+  /** Page-change delta when `delta` was requested (page-derived, untrusted). */
+  delta?: SnapshotDelta
 }
 
 // ── Vision pipeline shared types ─────────────────────────────────────────

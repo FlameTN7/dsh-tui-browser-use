@@ -227,6 +227,13 @@ export interface BrowserDriver {
   waitLoad(): Promise<void>
   /** Double-rAF settle so a freshly-painted page is captured. */
   settleRaf(): Promise<void>
+  /**
+   * Mutation-aware settle (B8): resolves when the document is ready AND no
+   * DOM mutations have occurred for a short quiet window, bounded by a hard
+   * `timeoutMs` cap. More robust than a bare double-rAF for pages that render
+   * asynchronously after an action, yet never runs longer than `timeoutMs`.
+   */
+  settleStable(timeoutMs: number): Promise<void>
   title(): Promise<string>
   url(): string
   eval<T = unknown>(expr: string): Promise<T>

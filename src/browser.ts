@@ -15,7 +15,7 @@
 import { existsSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ErrorCode, NavigateParams, NavigateResult, ClickParams, ClickResult, TypeParams, TypeResult, EvaluateParams, EvaluateResult, ScreenshotParams, StatusResult, SnapshotParams, SnapshotNode, SnapshotResult, NavigationResult, ScrollParams, ScrollResult, PressParams, PressResult, WaitParams, WaitResult, HoverParams, HoverResult, CookiesParams, CookiesResult, ConsoleMessagesParams, ConsoleMessagesResult, NetworkRequestsParams, NetworkRequestsResult, PdfParams, PdfResult, DownloadParams, DownloadResult, I18nTemplate, BrowserUseConfig, CaptureSegmentsResult } from './types.js'
+import type { ErrorCode, NavigateParams, NavigateResult, ClickParams, ClickResult, TypeParams, TypeResult, EvaluateParams, EvaluateResult, ScreenshotParams, StatusResult, SnapshotParams, SnapshotNode, SnapshotResult, SnapshotDelta, NavigationResult, ScrollParams, ScrollResult, PressParams, PressResult, WaitParams, WaitResult, HoverParams, HoverResult, CookiesParams, CookiesResult, ConsoleMessagesParams, ConsoleMessagesResult, NetworkRequestsParams, NetworkRequestsResult, PdfParams, PdfResult, DownloadParams, DownloadResult, I18nTemplate, BrowserUseConfig, CaptureSegmentsResult } from './types.js'
 import { t } from './i18n.js'
 import { effectiveViewport } from './capabilities.js'
 import { requestUrl, displayUrl } from './download-url.js'
@@ -472,6 +472,31 @@ export class BrowserSession {
     return this.ctx
   }
 
+  /**
+   * Mutation-aware settle (B8): waits for the document to be ready AND quiet
+   * (no DOM mutations for a short window), bounded by a hard cap so a
+   * continuously-mutating page never wedges an action. The cap is a fraction of
+   * the configured settle timeout so a busy page (live clock, animation loop)
+   * adds bounded latency instead of stalling to the full budget.
+   */
+  private async settlePage(): Promise<void> {
+    const budget = Math.min(this.settleTimeoutMs, 1000)
+    await this.driver.settleStable(budget).catch(() => undefined)
+  }
+
+  /**
+   * Establish the snapshot baseline BEFORE an action (best-effort). A subsequent
+   * `readSnapshotDelta` then reports what changed as a result of the action.
+   */
+  private async setSnapshotBaseline(maxNodes = 60): Promise<void> {
+    try { await this.snapshot({ maxNodes }) } catch { /* best-effort delta */ }
+  }
+
+  /** Read the page-change delta since the baseline (best-effort). */
+  private async readSnapshotDelta(maxNodes = 60): Promise<SnapshotDelta | undefined> {
+    try { return (await this.snapshot({ maxNodes, delta: true })).delta } catch { return undefined }
+  }
+
   /** Release the browser and mark the session unstarted. */
   async close(): Promise<void> {
     // Persist a login snapshot back to the configured path (best-effort) before
@@ -497,8 +522,8 @@ export class BrowserSession {
       // never blocks a successful navigate.
       const resp = await page.goto(params.url, { waitUntil: 'domcontentloaded', timeout: this.navTimeoutMs })
       await page.waitForLoadState('load').catch(() => undefined)
-      // Let the layout settle a beat rather than racing a still-parsing document.
-      await page.evaluate('new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))').catch(() => undefined)
+      // Let the layout settle rather than racing a still-parsing document.
+      await this.settlePage()
       return {
         title: await page.title(),
         // R-11: sanitize the resolved URL so a signed/token-carrying redirect
@@ -516,6 +541,8 @@ export class BrowserSession {
     if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
     const page = this.requirePage()
     const before = page.url()
+    const wantDelta = params.delta === true
+    if (wantDelta) await this.setSnapshotBaseline()
     try {
       // `text` (visible text) wins over `selector` (CSS); a bare selector keeps
       // using the CSS path. Searches main frame then child frames (iframe).
@@ -524,7 +551,10 @@ export class BrowserSession {
       await waitForLocator(locator, this.actionTimeoutMs)
       await locator.first().click()
       await page.waitForLoadState('load').catch(() => undefined)
-      return { success: true, newUrl: sanitizeUrl(page.url() || before, this.env.sensitiveQueryKeys) }
+      await this.settlePage()
+      const result: ClickResult = { success: true, newUrl: sanitizeUrl(page.url() || before, this.env.sensitiveQueryKeys) }
+      if (wantDelta) { const d = await this.readSnapshotDelta(); if (d) result.delta = d }
+      return result
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
@@ -534,6 +564,8 @@ export class BrowserSession {
   async type(params: TypeParams): Promise<TypeResult> {
     if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
     const page = this.requirePage()
+    const wantDelta = params.delta === true
+    if (wantDelta) await this.setSnapshotBaseline()
     try {
       // `type` uses a CSS selector (the caller queries the field). Search main
       // frame then child frames, and wait for the input before filling so a SPA
@@ -548,7 +580,10 @@ export class BrowserSession {
       if (params.enter) {
         try { await page.keyboard.press(params.enter) } catch { /* key may be unsupported; ignore */ }
       }
-      return { success: true }
+      await this.settlePage()
+      const result: TypeResult = { success: true }
+      if (wantDelta) { const d = await this.readSnapshotDelta(); if (d) result.delta = d }
+      return result
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
@@ -559,7 +594,7 @@ export class BrowserSession {
   private async navSettle(resp: { status(): number | null; url(): string } | null, fallbackUrl: string): Promise<NavigationResult> {
     const page = this.requirePage()
     await page.waitForLoadState('load').catch(() => undefined)
-    await page.evaluate('new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))').catch(() => undefined)
+    await this.settlePage()
     return { title: await page.title(), url: sanitizeUrl(resp?.url() ?? fallbackUrl, this.env.sensitiveQueryKeys), status: resp?.status() ?? null }
   }
 
@@ -607,11 +642,15 @@ export class BrowserSession {
     const page = this.requirePage()
     const x = Math.trunc(Number(params.x) || 0)
     const y = Math.trunc(Number(params.y) || 0)
+    const wantDelta = params.delta === true
+    if (wantDelta) await this.setSnapshotBaseline()
     try {
       await page.evaluate(`window.scrollBy(${x}, ${y})`)
-      await page.evaluate('new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))').catch(() => undefined)
+      await this.settlePage()
       const pos = await page.evaluate<{ x: number; y: number }>('({ x: window.scrollX, y: window.scrollY })').catch(() => ({ x, y }))
-      return { x: Math.trunc(pos?.x ?? x), y: Math.trunc(pos?.y ?? y) }
+      const result: ScrollResult = { x: Math.trunc(pos?.x ?? x), y: Math.trunc(pos?.y ?? y) }
+      if (wantDelta) { const d = await this.readSnapshotDelta(); if (d) result.delta = d }
+      return result
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
@@ -940,10 +979,22 @@ export class BrowserSession {
     if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
     const page = this.requirePage()
     const maxNodes = Math.min(Math.max(Number(params.maxNodes) || 200, 1), 500)
+    const wantDelta = params.delta === true
     try {
       const nodes = (await page.evaluate<unknown[]>(
         `(() => {
           const MAX = ${maxNodes};
+          const DELTA = ${wantDelta ? 'true' : 'false'};
+          const DELTA_CAP = 12;
+          // Stable page-internal id registry (B7): a WeakMap holds element → id so
+          // the same DOM node keeps its id across evaluate calls within the same
+          // document. The "last" field keeps the previous snapshot's plain node
+          // list so a later delta snapshot can diff against it. Full navigation
+          // resets the window realm, clearing both — which is exactly right: old
+          // ids are stale.
+          const state = window.__dsh_browser_snapshot_state__ ||
+            (window.__dsh_browser_snapshot_state__ = { nextId: 1, ids: new WeakMap(), last: null });
+          const idOf = (el) => { let id = state.ids.get(el); if (!id) { id = state.nextId++; state.ids.set(el, id); } return id; };
           const accName = (el) => {
             // aria-labelledby references one or more element ids whose text is the name.
             const labelledby = el.getAttribute('aria-labelledby');
@@ -998,7 +1049,7 @@ export class BrowserSession {
             totalMatching += 1;
             if (nodes.length >= MAX) continue;
             const node = {
-              index: nodes.length + 1,
+              id: idOf(el), index: nodes.length + 1,
               role, name: name.slice(0, 160), tag,
               disabled: el.disabled === true || el.getAttribute('aria-disabled') === 'true',
               x: Math.round(rect.x), y: Math.round(rect.y),
@@ -1011,14 +1062,44 @@ export class BrowserSession {
             if (el.checked !== undefined) node.checked = el.checked === true;
             nodes.push(node);
           }
-          return { nodes, total: totalMatching, truncated: totalMatching > nodes.length };
+          // Content fingerprint (position excluded) to detect a "changed" node.
+          const fp = (n) => JSON.stringify([n.role, n.name, n.tag, n.type || '', n.disabled, n.checked, n.placeholder || '', n.href || '', n.x, n.y, n.width, n.height]);
+          const prev = state.last || [];
+          const prevById = new Map(prev.map((n) => [n.id, n]));
+          const currById = new Map(nodes.map((n) => [n.id, n]));
+          let delta;
+          if (DELTA) {
+            const removed = prev.filter((n) => !currById.has(n.id)).map((n) => ({ id: n.id, role: n.role, name: n.name }));
+            const added = nodes.filter((n) => !prevById.has(n.id));
+            const changed = nodes.filter((n) => { const p = prevById.get(n.id); return p && fp(p) !== fp(n); });
+            const reindexed = nodes.filter((n) => { const p = prevById.get(n.id); return p && p.index !== n.index; }).map((n) => ({ id: n.id, from: prevById.get(n.id).index, to: n.index }));
+            let truncated = false;
+            if (removed.length > DELTA_CAP) { removed.length = DELTA_CAP; truncated = true; }
+            if (added.length > DELTA_CAP) { added.length = DELTA_CAP; truncated = true; }
+            if (changed.length > DELTA_CAP) { changed.length = DELTA_CAP; truncated = true; }
+            if (reindexed.length > DELTA_CAP) { reindexed.length = DELTA_CAP; truncated = true; }
+            delta = { added, changed, removed, reindexed };
+            if (truncated) delta.truncated = true;
+          }
+          state.last = nodes;
+          return { nodes, total: totalMatching, truncated: totalMatching > nodes.length, ...(DELTA ? { delta } : {}) };
         })()`,
       )) ?? { nodes: [] }
       const raw = (typeof nodes === 'object' && nodes && 'nodes' in nodes && Array.isArray((nodes as { nodes: SnapshotNode[] }).nodes))
-        ? (nodes as { nodes: SnapshotNode[]; total?: number; truncated?: boolean })
-        : { nodes: nodes as SnapshotNode[], total: undefined, truncated: undefined }
+        ? (nodes as { nodes: SnapshotNode[]; total?: number; truncated?: boolean; delta?: SnapshotDelta })
+        : { nodes: nodes as SnapshotNode[], total: undefined, truncated: undefined, delta: undefined }
       const out = raw.nodes.map((n) => (n.href ? { ...n, href: sanitizeUrl(n.href, this.env.sensitiveQueryKeys) } : n))
-      return { nodes: out, ...(raw.total !== undefined ? { total: raw.total } : {}), ...(raw.truncated !== undefined ? { truncated: raw.truncated } : {}) }
+      const sanitizeNodes = (ns: SnapshotNode[]): SnapshotNode[] => ns.map((n) => (n.href ? { ...n, href: sanitizeUrl(n.href, this.env.sensitiveQueryKeys) } : n))
+      const sanitizeDelta = (d: SnapshotDelta): SnapshotDelta => {
+        const r: SnapshotDelta = {}
+        if (d.added) r.added = sanitizeNodes(d.added)
+        if (d.changed) r.changed = sanitizeNodes(d.changed)
+        if (d.removed) r.removed = d.removed
+        if (d.reindexed) r.reindexed = d.reindexed
+        if (d.truncated !== undefined) r.truncated = d.truncated
+        return r
+      }
+      return { nodes: out, ...(raw.total !== undefined ? { total: raw.total } : {}), ...(raw.truncated !== undefined ? { truncated: raw.truncated } : {}), ...(raw.delta !== undefined ? { delta: sanitizeDelta(raw.delta) } : {}) }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))

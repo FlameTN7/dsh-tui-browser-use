@@ -252,6 +252,52 @@ export class PlaywrightDriver implements BrowserDriver {
     await this.requirePage().evaluate('new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))').catch(() => undefined)
   }
 
+  /**
+   * Mutation-aware settle (B8): a fast path (double-rAF) resolves immediately
+   * on a quiet page; only a page that keeps mutating extends toward a quiet
+   * window and then the hard `timeoutMs` cap. This replaces a bare double-rAF
+   * for pages that render asynchronously after an action, so a snapshot is not
+   * taken mid-update, while never blocking longer than `timeoutMs`.
+   */
+  async settleStable(timeoutMs: number): Promise<void> {
+    const cap = Math.max(60, Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 6000)
+    await this.requirePage().evaluate(
+      `new Promise((resolve) => {
+        const deadline = Date.now() + ${cap};
+        const quietMs = Math.min(Math.max(Math.floor(${cap} / 5), 50), 250);
+        const done = () => {
+          if (finished) return;
+          finished = true;
+          if (timer) clearTimeout(timer);
+          if (mo) mo.disconnect();
+          if (rs) document.removeEventListener('readystatechange', rs);
+          resolve();
+        };
+        let finished = false;
+        let timer = null;
+        let mo = null;
+        let rs = null;
+        let mutationAt = Date.now();
+        mo = new MutationObserver(() => { mutationAt = Date.now(); });
+        mo.observe(document.documentElement, { childList: true, subtree: true, attributes: true, characterData: true });
+        const check = () => {
+          if (finished) return;
+          const now = Date.now();
+          if (document.readyState === 'complete' && now - mutationAt >= quietMs) return done();
+          if (now >= deadline) return done();
+          timer = setTimeout(check, Math.min(50, Math.max(16, deadline - now)));
+        };
+        rs = () => check();
+        document.addEventListener('readystatechange', rs);
+        // Fast path: a double-rAF flush. A quiet page (no recent mutation) resolves
+        // right away; a page still mutating defers to the quiet window / hard cap.
+        requestAnimationFrame(() => requestAnimationFrame(() => check()));
+        // Hard-cap safety even if rAF never fires (background tab / paused page).
+        timer = setTimeout(check, Math.min(60, Math.max(16, deadline - Date.now())));
+      })`,
+    ).catch(() => undefined)
+  }
+
   async title(): Promise<string> {
     return this.requirePage().title()
   }

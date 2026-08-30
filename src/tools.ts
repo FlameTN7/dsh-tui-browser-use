@@ -175,6 +175,17 @@ export function renderUntrusted(args: unknown, value: unknown): Array<Record<str
   return out
 }
 
+/**
+ * Render for click/type/scroll: when the caller opts into a page-change
+ * `delta`, the result carries page-derived content, so it is labelled
+ * `[untrusted page content]` (prompt-injection guard); otherwise the existing
+ * compact `renderText` is used with no behaviour change.
+ */
+export function renderActionDelta(args: unknown, value: unknown): Array<Record<string, unknown>> {
+  const wantsDelta = (args as { delta?: boolean } | undefined)?.delta === true
+  return wantsDelta ? renderUntrusted(args, value) : renderText(args, value)
+}
+
 /** A permissive output schema describing the unified envelope. */
 function envelopeSchema(): Record<string, unknown> {
   return {
@@ -421,8 +432,9 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       parameters: objSchema({
         selector: { type: 'string', description: 'CSS selector to click.' },
         text: { type: 'string', description: 'Visible text to locate and click.' },
+        delta: { type: 'boolean', description: 'Return a short page-change delta (`added/changed/removed/reindexed`) from before the click (default false).' },
       }),
-      output: { schema: envelopeSchema(), render: renderText },
+      output: { schema: envelopeSchema(), render: renderActionDelta },
       timeoutMs: 15_000,
       isConcurrencySafe: () => false,
       async execute(args: unknown): Promise<ResultEnvelope<ClickResult>> {
@@ -441,8 +453,9 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         text: { type: 'string', description: 'Text to type into the field.' },
         enter: { type: 'string', description: 'Optional key to press after filling, e.g. Enter or Tab.' },
         clear: { type: 'boolean', description: 'Clear the field before filling (default false).' },
+        delta: { type: 'boolean', description: 'Return a short page-change delta (`added/changed/removed/reindexed`) from before the type (default false).' },
       }, ['selector', 'text']),
-      output: { schema: envelopeSchema(), render: renderText },
+      output: { schema: envelopeSchema(), render: renderActionDelta },
       timeoutMs: 15_000,
       isConcurrencySafe: () => false,
       async execute(args: unknown): Promise<ResultEnvelope<TypeResult>> {
@@ -610,9 +623,10 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
 
     {
       name: 'browser_snapshot',
-      description: 'Return a structured accessibility snapshot of the current page — an indexed list of interactive/semantic elements (role, accessible name, tag, disabled, bounding box). This is the default way to observe a page and reason about what to click/type without needing a screenshot.',
+      description: 'Return a structured accessibility snapshot of the current page — an indexed list of interactive/semantic elements (role, accessible name, tag, disabled, bounding box). This is the default way to observe a page and reason about what to click/type without needing a screenshot. Each node has a stable `id` that persists across calls on the same page, so you can correlate an element between snapshots. With `delta: true`, returns `added/changed/removed/reindexed` nodes since the previous snapshot.',
       parameters: objSchema({
         maxNodes: { type: 'integer', description: 'Maximum nodes to return (default 200, capped at 500).' },
+        delta: { type: 'boolean', description: 'Return a page-change delta (`added/changed/removed/reindexed`) relative to the previous snapshot (default false).' },
       }),
       output: { schema: envelopeSchema(), render: renderUntrusted },
       timeoutMs: 15_000,
@@ -673,8 +687,9 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       parameters: objSchema({
         x: { type: 'integer', description: 'Horizontal scroll delta in CSS pixels (default 0).' },
         y: { type: 'integer', description: 'Vertical scroll delta in CSS pixels (default 0).' },
+        delta: { type: 'boolean', description: 'Return a short page-change delta (`added/changed/removed/reindexed`) from before the scroll (default false).' },
       }),
-      output: { schema: envelopeSchema(), render: renderText },
+      output: { schema: envelopeSchema(), render: renderActionDelta },
       timeoutMs: 10_000,
       isConcurrencySafe: () => true,
       async execute(args: unknown): Promise<ResultEnvelope<ScrollResult>> {

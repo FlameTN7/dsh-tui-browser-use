@@ -99,6 +99,12 @@ async function main() {
     assert.ok(d.output && typeof d.output.schema === 'object', `${d.name} declares output schema`)
   }
 
+  // P2-2.6: the delta seam is exposed on browser_snapshot and the action tools.
+  assert.ok((defs.find((d) => d.name === 'browser_snapshot')?.parameters as { properties?: Record<string, unknown> })?.properties?.delta, 'browser_snapshot declares delta param')
+  for (const name of ['browser_click', 'browser_type', 'browser_scroll']) {
+    assert.ok((defs.find((d) => d.name === name)?.parameters as { properties?: Record<string, unknown> })?.properties?.delta, `${name} declares delta param`)
+  }
+
   console.log(`[smoke] browser-use OK: plugin=${plugin.name}, tools=${names.length}, capabilities+preprocess verified`)
 }
 
