@@ -8,6 +8,10 @@
     "url": "https://github.com/FlameTN7/dsh-tui-browser-use.git"
   },
   "homepage": "https://github.com/FlameTN7/dsh-tui-browser-use",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
   "type": "module",
   "main": "lib/types/index.js",
   "types": "lib/types/index.d.ts",
