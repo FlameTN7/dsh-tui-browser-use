@@ -23,6 +23,16 @@ import { DEFAULT_MAX_IMAGE_BYTES } from './image-pipeline.js'
 import { DEFAULT_SENSITIVE_QUERY_KEYS, loadRuntimeEnv, type RuntimeEnv } from './runtime-env.js'
 import { PlaywrightDriver } from './driver/playwright-driver.js'
 import type { BrowserDriver } from './driver/browser-driver.js'
+import {
+  resolveSession,
+  acquireLock,
+  releaseLock,
+  writeStorageState,
+  purgeEphemeral,
+  sanitizePath,
+  degradeToIsolated,
+  type ResolvedSessionPaths,
+} from './session-profiles.js'
 
 // ── Structural Playwright types (no hard dependency) ─────────────────────
 
@@ -343,13 +353,19 @@ export class BrowserSession {
   private readonly actionTimeoutMs: number
   private readonly settleTimeoutMs: number
 
-  // ── Session-state persistence (P1 #8) ───────────────────────────────────
-  // userDataDir retains the full browser profile (cookies/localStorage) across
-  // runs; storageStatePath exports/imports a bare cookie+localStorage snapshot.
-  // Both are env-driven (DSH_TUI_BROWSER_USER_DATA_DIR / _STORAGE_STATE); a
-  // missing or unreadable path degrades to a fresh session rather than failing.
-  private readonly userDataDir: string | undefined
-  private readonly storageStatePath: string | undefined
+  // ── Session-state persistence (P1 #8 / Phase 3) ─────────────────────────
+  // `sessionPaths` resolves the effective mode/paths from config + env each
+  // construction. `userDataDir` retains the full browser profile (cookies/
+  // localStorage) across runs; `storageStatePath` exports/imports a bare
+  // cookie+localStorage snapshot. Precedence (AGENTS.md §5, unchanged): env
+  // overrides win (external mode); otherwise `session.mode` picks a managed
+  // persistent/isolated profile. A missing/unreadable path degrades to a fresh
+  // session rather than failing.
+  private sessionPaths: ResolvedSessionPaths
+  /** Whether we currently hold a persistent lock file (to release on close). */
+  private sessionLocked = false
+  /** Whether a persistent lock conflict degraded this run to an isolated session. */
+  private degraded = false
   private readonly dialog: 'accept' | 'dismiss' | 'ignore'
 
   // ── Console / network capture (P1 #7) ───────────────────────────────────
@@ -372,8 +388,7 @@ export class BrowserSession {
     this.actionTimeoutMs = env.actionTimeoutMs
     this.settleTimeoutMs = env.settleTimeoutMs
     this.dialog = env.dialog
-    this.userDataDir = env.userDataDir
-    this.storageStatePath = env.storageStatePath
+    this.sessionPaths = resolveSession(config, env)
   }
 
   /**
@@ -425,9 +440,42 @@ export class BrowserSession {
    */
   async ensureStarted(): Promise<boolean> {
     if (this.page !== null && this.ctx !== null) return true
+    // Re-resolve the session paths on each fresh start so a live `/settings`
+    // edit to `session.mode`/`session.profile` is honoured the next time the
+    // browser is actually started (matching the proxy restart semantics).
+    this.sessionPaths = resolveSession(this.config, this.env)
+    // Persistent mode: acquire the profile lock so two processes cannot share a
+    // profile (B5). On conflict we DEGRADE to an isolated session rather than
+    // hanging — reported via `status().session.degraded`. The paths are reset to
+    // a brand-new ephemeral run dir so the browser never touches the locked
+    // profile dir.
+    if (this.sessionPaths.mode === 'persistent' && this.sessionPaths.lockPath) {
+      const lock = acquireLock(this.sessionPaths.lockPath)
+      if (lock.held) {
+        this.sessionLocked = true
+        this.degraded = false
+      } else {
+        this.degraded = true
+        this.sessionPaths = degradeToIsolated(this.sessionPaths)
+        this.sessionLocked = false
+      }
+    }
+    // Lazy-create the user-data dir (B6): profiles are only materialised on the
+    // FIRST tool call that actually starts the browser, never at construction.
+    if (this.sessionPaths.userDataDir) {
+      try { mkdirSync(this.sessionPaths.userDataDir, { recursive: true }) } catch { /* best-effort */ }
+    }
+    // Forward the RESOLVED paths (not the raw env) so a managed persistent /
+    // isolated profile is what the browser actually launches with. The spread
+    // keeps every other env override intact.
+    const startEnv: RuntimeEnv = {
+      ...this.env,
+      userDataDir: this.sessionPaths.userDataDir,
+      storageStatePath: this.sessionPaths.storageStatePath,
+    }
     const started = await this.driver.start({
       config: this.config,
-      env: this.env,
+      env: startEnv,
       lang: this.lang,
       handlers: {
         onConsole: (m) => {
@@ -499,12 +547,24 @@ export class BrowserSession {
 
   /** Release the browser and mark the session unstarted. */
   async close(): Promise<void> {
-    // Persist a login snapshot back to the configured path (best-effort) before
-    // tearing the browser down.
-    if (this.storageStatePath && this.ctx) {
-      try { await this.ctx.storageState({ path: this.storageStatePath }) } catch { /* best-effort */ }
+    // Persistent mode: export the login snapshot to the resolved path before
+    // tearing the browser down (best-effort, atomic temp+rename+0600). This is
+    // what lets a managed profile survive restarts. A missing/unreadable target
+    // degrades silently (the browser is always closed regardless).
+    if (this.sessionPaths.storageStatePath && this.ctx) {
+      try {
+        const data = await this.ctx.storageState()
+        writeStorageState(this.sessionPaths.storageStatePath, data)
+      } catch { /* best-effort */ }
     }
     await this.driver.close()
+    // Release a held persistent lock so the next start can re-acquire it.
+    if (this.sessionLocked && this.sessionPaths.lockPath) {
+      releaseLock(this.sessionPaths.lockPath)
+      this.sessionLocked = false
+    }
+    // Best-effort cleanup of an isolated session run dir (never blocks close).
+    purgeEphemeral(this.sessionPaths.ephemeralRunDir)
     this.page = null
     this.ctx = null
   }
@@ -1137,7 +1197,21 @@ export class BrowserSession {
     if (available) {
       try { version = this.driver.version() } catch { /* keep unknown */ }
     }
-    return { available, version, config: structuredClone(this.config) }
+    // Report the effective session/profile (Phase 3). The profile dir is
+    // SANITIZED (home redacted) and never carries secrets; a persistent lock
+    // conflict's `degraded` flag is surfaced so the agent knows the run fell
+    // back to an isolated session.
+    return {
+      available,
+      version,
+      config: structuredClone(this.config),
+      session: {
+        mode: this.sessionPaths.mode,
+        profile: this.sessionPaths.profileName,
+        profileDir: sanitizePath(this.sessionPaths.profileDir) ?? null,
+        degraded: this.degraded,
+      },
+    }
   }
 }
 

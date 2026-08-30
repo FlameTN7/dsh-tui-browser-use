@@ -193,6 +193,27 @@ export function registerSettingsSection(ctx: { get(name: string, optional?: bool
         kind: 'text',
         placeholder: 'http://host:port',
       },
+      {
+        path: ['session', 'mode'],
+        label: d('settings.session.mode.label')?.en ?? 'Session mode',
+        descriptions: d('settings.session.mode.label'),
+        hint: d('settings.session.mode.description')?.en,
+        hintDescriptions: d('settings.session.mode.description'),
+        kind: 'select',
+        options: [
+          { value: 'persistent', label: 'Persistent', descriptions: { zh: '保留登录态', en: 'Keep login state' } },
+          { value: 'isolated', label: 'Isolated', descriptions: { zh: '每次独立', en: 'Fresh each run' } },
+        ],
+      },
+      {
+        path: ['session', 'profile'],
+        label: d('settings.session.profile.label')?.en ?? 'Profile name',
+        descriptions: d('settings.session.profile.label'),
+        hint: d('settings.session.profile.description')?.en,
+        hintDescriptions: d('settings.session.profile.description'),
+        kind: 'text',
+        placeholder: 'default',
+      },
     ],
   }
 

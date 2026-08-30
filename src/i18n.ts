@@ -108,6 +108,22 @@ export const dict: I18nDict = {
     zh: '访问外网站点用的 HTTP 代理（如 http://host:port）。留空则用环境变量 DSH_TUI_BROWSER_PROXY。',
     en: 'HTTP proxy for external sites (e.g. http://host:port). Empty falls back to env DSH_TUI_BROWSER_PROXY.',
   },
+  'settings.session.mode.label': {
+    zh: '会话模式',
+    en: 'Session mode',
+  },
+  'settings.session.mode.description': {
+    zh: 'persistent 保留一份固定命名的登录态档案（跨重启登录仍在）；isolated 每次独立临时档案、关闭后清理。留空则沿用旧行为（DSH_TUI_BROWSER_USER_DATA_DIR / _STORAGE_STATE 优先）。',
+    en: 'persistent keeps one fixed, named login-state profile (login survives restarts); isolated uses a fresh temp profile each run and cleans it up. Leave empty for the legacy behaviour (DSH_TUI_BROWSER_USER_DATA_DIR / _STORAGE_STATE take priority).',
+  },
+  'settings.session.profile.label': {
+    zh: '档案名',
+    en: 'Profile name',
+  },
+  'settings.session.profile.description': {
+    zh: '档案目录名（persistent 模式）。需为单段安全字符（字母数字._-，1-64），否则回退 default。',
+    en: 'Profile directory name (persistent mode). Must be one safe segment (A-Za-z0-9._-, 1-64); otherwise falls back to default.',
+  },
   'tiling.truncated.note': {
     zh: '页面在第 {{captured}}/{{total}} 段后截断，还有 {{dropped}} 段未被采集，可见内容只到约 {{heightPx}}px 处，其下缺失。',
     en: 'The page was truncated after segment {{captured}} of {{total}}; {{dropped}} more segment(s) were not captured, so content is only readable down to roughly {{heightPx}}px and everything below is missing.',
