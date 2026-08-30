@@ -236,8 +236,8 @@ interface PreparedCapture {
  * a localized `tilingNote` is produced so the caller can append it to the vision
  * instruction — the model would otherwise silently see only the captured tiles.
  */
-async function capturePreparedImages(session: BrowserSession, lang: Lang): Promise<PreparedCapture> {
-  const cap = await session.captureSegments()
+async function capturePreparedImages(session: BrowserSession, lang: Lang, maxImageBytes?: number): Promise<PreparedCapture> {
+  const cap = await session.captureSegments({ ...(maxImageBytes !== undefined ? { maxImageBytes } : {}) })
   const dim = effectiveViewport(session.config)
   const w = dim.width
   const h = dim.height
@@ -385,7 +385,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
             })
           }
 
-          const cap = await capturePreparedImages(session, lang)
+          const cap = await capturePreparedImages(session, lang, env?.maxImageBytes)
           let insight = ''
           let fileId = ''
           if (visionActive && cap.images.length > 0) {
@@ -499,7 +499,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
           if (!p.schema || typeof p.schema !== 'object') return fail(t('error.argument', lang, { message: 'schema (JSON Schema) is required' }))
           const env = await visionEnvOrNull(deps)
           if (!env) return fail(t('error.vision-unavailable', lang))
-          const cap = await capturePreparedImages(session, lang)
+          const cap = await capturePreparedImages(session, lang, env?.maxImageBytes)
           const { analyzeImages } = await import('./vision.js')
 
           // The schema contract is asserted on every attempt so the model never
@@ -551,7 +551,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
           const { analyzeImages } = await import('./vision.js')
           while (steps < maxSteps && !done && consecutiveFailures < maxFailures) {
             steps += 1
-            const cap = await capturePreparedImages(session, lang)
+            const cap = await capturePreparedImages(session, lang, env?.maxImageBytes)
             // Inject a budget warning when approaching the step ceiling so the
             // agent winds down and reports a partial result instead of burning
             // the remaining budget (mirrors browser-use's `_inject_budget_warning`).

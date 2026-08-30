@@ -312,6 +312,7 @@ export function apply(ctx: Context, config: Config): void {
       imageTransfer,
       provider,
       currentModel,
+      ...(capability.maxImageBytes !== undefined ? { maxImageBytes: capability.maxImageBytes } : {}),
     }
   }
 

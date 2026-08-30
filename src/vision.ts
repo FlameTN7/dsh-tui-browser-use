@@ -34,6 +34,8 @@ export interface VisionEnv {
   provider: string
   /** Current model route name. */
   currentModel: string
+  /** Override for the capture byte budget (from providers[].maxImageBytes). */
+  maxImageBytes?: number
 }
 
 /** What a vision call returns. */
