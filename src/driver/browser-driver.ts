@@ -128,6 +128,8 @@ export interface PwContext {
   clearCookies(): Promise<void>
   /** API request handle, used by `browser_download` to carry session cookies/auth. */
   request: PwApiRequestContext
+  /** The owning browser (available on persistent contexts from `launchPersistentContext`). */
+  browser(): PwBrowser
 }
 
 export interface PwApiResponse {
@@ -152,6 +154,7 @@ export interface PwBrowser {
 
 export interface PwChromium {
   launch(opts: { channel?: string; executablePath?: string; headless?: boolean; args?: string[]; proxy?: { server: string; bypass?: string } }): Promise<PwBrowser>
+  launchPersistentContext(userDataDir: string, opts: { channel?: string; executablePath?: string; headless?: boolean; args?: string[]; proxy?: { server: string; bypass?: string }; storageState?: string }): Promise<PwContext>
 }
 
 /** Common launch options shared by every Playwright browser engine. */
@@ -159,8 +162,8 @@ export type PwLaunchOptions = { channel?: string; executablePath?: string; headl
 
 export interface PwModule {
   chromium: PwChromium
-  firefox?: { launch(opts: PwLaunchOptions): Promise<PwBrowser> }
-  webkit?: { launch(opts: PwLaunchOptions): Promise<PwBrowser> }
+  firefox?: { launch(opts: PwLaunchOptions): Promise<PwBrowser>; launchPersistentContext(userDataDir: string, opts: PwLaunchOptions & { storageState?: string }): Promise<PwContext> }
+  webkit?: { launch(opts: PwLaunchOptions): Promise<PwBrowser>; launchPersistentContext(userDataDir: string, opts: PwLaunchOptions & { storageState?: string }): Promise<PwContext> }
 }
 
 export type PwBrowserEngine = 'chromium' | 'firefox' | 'webkit'

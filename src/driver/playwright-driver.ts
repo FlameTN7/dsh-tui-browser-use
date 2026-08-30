@@ -138,35 +138,57 @@ export class PlaywrightDriver implements BrowserDriver {
       const proxy = resolveProxy(opts.config.proxy, opts.env)
       const engine: PwBrowserEngine = opts.env.engine
       const handlers = opts.handlers
+      const storageState = opts.env.storageStatePath && existsSync(opts.env.storageStatePath)
+        ? opts.env.storageStatePath
+        : undefined
+      const baseOpts = { headless: true, args: engineLaunchArgs(engine, opts.env.noSandbox), ...(proxy ? { proxy } : {}) }
+
       if (engine !== 'chromium') {
         const inject = pw[engine]
         if (!inject) {
           this._startError = `browser-engine-missing:${engine}`
           return false
         }
-        this._engine = await inject.launch({ headless: true, args: engineLaunchArgs(engine, opts.env.noSandbox), ...(proxy ? { proxy } : {}) })
+        // `browserType.launch` rejects `userDataDir`; use `launchPersistentContext`
+        // when the session resolves a managed user-data dir (persistent/isolated).
+        if (opts.env.userDataDir && inject.launchPersistentContext) {
+          this._ctx = await inject.launchPersistentContext(opts.env.userDataDir, { ...baseOpts, ...(storageState ? { storageState } : {}) })
+          this._engine = this._ctx.browser()
+        } else {
+          this._engine = await inject.launch(baseOpts)
+          this._ctx = await this._engine.newContext({ storageState })
+        }
       } else {
-        const args = engineLaunchArgs('chromium', opts.env.noSandbox)
-        try {
-          this._engine = await pw.chromium.launch({ channel: 'chrome', headless: true, args, ...(proxy ? { proxy } : {}), ...(opts.env.userDataDir ? { userDataDir: opts.env.userDataDir } : {}) })
-        } catch {
-          const executablePath = this.resolveExecutablePath(opts.env)
-          if (executablePath) {
-            try {
-              this._engine = await pw.chromium.launch({ executablePath, headless: true, args, ...(proxy ? { proxy } : {}), ...(opts.env.userDataDir ? { userDataDir: opts.env.userDataDir } : {}) })
-            } catch {
-              this._engine = await pw.chromium.launch({ headless: true, args, ...(proxy ? { proxy } : {}), ...(opts.env.userDataDir ? { userDataDir: opts.env.userDataDir } : {}) })
-            }
-          } else {
-            this._engine = await pw.chromium.launch({ headless: true, args, ...(proxy ? { proxy } : {}), ...(opts.env.userDataDir ? { userDataDir: opts.env.userDataDir } : {}) })
+        // Chromium launch sources in order: channel:'chrome' → explicit binary → bundled.
+        const persistent = opts.env.userDataDir
+        const sources: Array<{ channel?: string; executablePath?: string }> = [{ channel: 'chrome' }]
+        const exe = this.resolveExecutablePath(opts.env)
+        if (exe) sources.push({ executablePath: exe })
+        sources.push({})
+
+        let launched: PwBrowser | PwContext | null = null
+        let lastErr: unknown = null
+        for (const src of sources) {
+          try {
+            const pass = { ...baseOpts, ...src }
+            launched = persistent
+              ? await pw.chromium.launchPersistentContext(persistent, { ...pass, ...(storageState ? { storageState } : {}) })
+              : await pw.chromium.launch(pass)
+            break
+          } catch (err) {
+            lastErr = err
           }
         }
+        if (!launched) throw lastErr
+        if (persistent) {
+          this._ctx = launched as PwContext
+          this._engine = this._ctx.browser()
+        } else {
+          this._engine = launched as PwBrowser
+          this._ctx = await this._engine.newContext({ storageState })
+        }
       }
-      const ctx = await this._engine.newContext({
-        storageState: opts.env.storageStatePath && existsSync(opts.env.storageStatePath) ? opts.env.storageStatePath : undefined,
-      })
-      this._ctx = ctx
-      const page = await ctx.newPage()
+      const page = await this._ctx.newPage()
       this._page = page
       const dim = effectiveViewport(opts.config)
       await page.setViewportSize({ width: dim.width, height: dim.height })
