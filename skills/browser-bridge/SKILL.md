@@ -77,11 +77,14 @@ All tools live in the `browser_*` namespace and return a unified envelope
   vision-driven loop of navigate/click/type/scroll/press/wait/hover actions
   toward a natural-language instruction and reports the answer, step count,
   and cost.
-- Screenshots are compressed (JPEG q=80) against the real `viewport`
+- Screenshots are compressed at capture time against the real `viewport`
   (`viewport.width`/`viewport.height`, default 1024×768; the old
-  `screenshot.maxDimension` is a deprecated alias). Large pages that exceed
-  the tiling threshold carry a tile plan (geometry only; pixel cropping needs
-  a codec and is deferred).
+  `screenshot.maxDimension` is a deprecated alias): JPEG uses a descending
+  quality staircase (configured → 60 → 40) so an oversized tile is re-captured
+  at a lower quality; the pipeline then validates the byte budget and reports
+  `oversize`. No pixel-level scaling is done (a codec is not wired). Large
+  pages that exceed the tiling threshold carry a tile plan (geometry only;
+  pixel cropping needs a codec and is deferred).
 - `browser_cookies` masks cookie values as `***` by default and reads them
   only with `readValues:true`, so a page's auth state never leaks into the
   model context.

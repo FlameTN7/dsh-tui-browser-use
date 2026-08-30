@@ -79,6 +79,8 @@ async function main() {
     { format: 'jpeg', quality: 80, maxWidth: 1024, maxHeight: 768, tiling: 'off' },
   )
   assert.ok(Array.isArray(prepared), 'prepareScreenshot returns an array')
+  assert.ok(typeof prepared[0]?.bytes === 'number', 'prepared image reports bytes')
+  assert.ok(typeof prepared[0]?.oversize === 'boolean', 'prepared image reports oversize')
 
   // 4. Tool definitions.
   const tools = await loadAlt([

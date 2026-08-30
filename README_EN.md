@@ -29,7 +29,7 @@
 │    │     ├─ DeepSeekAdapter  (Files API native)          │
 │    │     └─ OpenAIClient     (base64 inline)             │
 │    ├── src/capabilities.ts provider capability detection │
-│    ├── src/image-pipeline.ts compress/resize/tiling-det. │
+│    ├── src/image-pipeline.ts capture-compress/size-check/tiling-det. │
 │    ├── src/i18n.ts          bilingual UI dictionary      │
 │    └── src/settings-section.ts registers /settings block │
 └────────────────────────────────────────────────────────┘
@@ -95,7 +95,8 @@ The browser-use section in `/settings` (10 fields) exposes: `visionMode`, `viewp
 
 ```
 Playwright screenshot
-  → JPEG/PNG compression (q=80)
+  → capture-time JPEG compression (quality staircase 80→60→40, drop on budget).
+    Pipeline size/byte validation; no pixel-level scaling.
   → exceeds tiling.threshold? → scroll-capture (native-res images, wide pages split into columns)
   → DeepSeek Files API → file_id reference (content-hash reuse, prompt-cache friendly)
   → OpenAI-compatible endpoint → base64 inline

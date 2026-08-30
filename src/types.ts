@@ -459,6 +459,10 @@ export interface PreparedImage {
   /** Width/height after preprocessing. */
   width: number
   height: number
+  /** Byte size of the prepared payload (post any capture-time compression). */
+  bytes?: number
+  /** True when the payload exceeds the configured byte budget (no re-encode). */
+  oversize?: boolean
 }
 
 /** Detected capability for one provider route. */

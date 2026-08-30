@@ -30,7 +30,7 @@
 │    │     ├─ DeepSeekAdapter  (Files API 原生)            │
 │    │     └─ OpenAIClient     (base64 内联)               │
 │    ├── src/capabilities.ts  provider 能力判定             │
-│    ├── src/image-pipeline.ts 截图压缩/降采样/切分判定      │
+│    ├── src/image-pipeline.ts 截图捕获期压缩/尺寸校验/切分判定│
 │    ├── src/i18n.ts          双语 UI 字典                  │
 │    └── src/settings-section.ts 注册 /settings 设置区块     │
 └────────────────────────────────────────────────────────┘
@@ -96,7 +96,7 @@ npx playwright install chromium --with-deps   # Linux；Windows/macOS 去掉 --w
 
 ```
 Playwright 截图
-  → JPEG/PNG 压缩 (q=80)
+  → 捕获期 JPEG 压缩（品质 80→60→40 阶梯，超预算降档）；管线尺寸/字节校验（不做像素级缩放）
   → 超过 tiling.threshold？ → 滚屏分段（原生分辨率多图，含宽页分列）
   → DeepSeek Files API → file_id 引用（按内容 hash 复用，命中 prompt cache）
   → OpenAI 兼容端点 → base64 内联

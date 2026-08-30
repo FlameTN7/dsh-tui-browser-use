@@ -19,6 +19,7 @@ import type { ErrorCode, NavigateParams, NavigateResult, ClickParams, ClickResul
 import { t } from './i18n.js'
 import { effectiveViewport } from './capabilities.js'
 import { requestUrl, displayUrl } from './download-url.js'
+import { DEFAULT_MAX_IMAGE_BYTES } from './image-pipeline.js'
 
 // ── Structural Playwright types (no hard dependency) ─────────────────────
 
@@ -360,6 +361,36 @@ function envNum(name: string, fallback: number): number {
   const v = process.env[name]
   const n = v ? Number.parseFloat(v) : NaN
   return Number.isFinite(n) && n >= 0 ? n : fallback
+}
+
+/** JPEG quality staircase steps (descending), never going above `base`, floor at 40. */
+function jpegQualitySteps(base: number): number[] {
+  const b = Number.isFinite(base) && base > 0 ? base : 80
+  const steps = [b, 60, 40].filter((q) => q >= 40 && q <= b)
+  return Array.from(new Set(steps)).sort((x, y) => y - x)
+}
+
+/**
+ * Capture a screenshot and, for JPEG, drop the quality until the payload fits
+ * the byte budget (the "capture-time compression" from proposal §5.3). PNG is
+ * never re-encoded — it's captured once and the pipeline marks it `oversize`.
+ */
+async function captureWithBudget(
+  page: PwPage,
+  type: string,
+  quality: number | undefined,
+  maxImageBytes: number,
+): Promise<Buffer> {
+  if (type !== 'jpeg') {
+    return page.screenshot({ type, quality: undefined })
+  }
+  const steps = jpegQualitySteps(quality ?? 80)
+  let last: Buffer | null = null
+  for (const q of steps) {
+    last = await page.screenshot({ type, quality: q })
+    if (last.length <= maxImageBytes) return last
+  }
+  return last ?? (await page.screenshot({ type, quality }))
 }
 
 // ── Sensitive-data redaction (P1-04) ──────────────────────────────────────
@@ -909,11 +940,12 @@ export class BrowserSession {
    * captured, and the pixel extent covered — so callers can surface the loss to
    * the agent instead of silently omitting content.
    */
-  async captureSegments(): Promise<CaptureSegmentsResult> {
+  async captureSegments(opts?: { maxImageBytes?: number }): Promise<CaptureSegmentsResult> {
     if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
     const page = this.requirePage()
     const type = this.config.screenshot.format === 'png' ? 'png' : 'jpeg'
     const quality = type === 'jpeg' ? this.config.screenshot.quality : undefined
+    const budget = opts?.maxImageBytes ?? DEFAULT_MAX_IMAGE_BYTES
     const dim = effectiveViewport(this.config)
     const vpW = dim.width
     const vpH = dim.height
@@ -922,7 +954,7 @@ export class BrowserSession {
     const stepY = Math.max(1, vpH - overlap)
 
     const single = async (): Promise<CaptureSegmentsResult> => {
-      const buf = await page.screenshot({ type, quality })
+      const buf = await captureWithBudget(page, type, quality, budget)
       // Even when not tiling, report the page's real scrollable extent (not the
       // viewport size) so callers/agents see how much content exists (P1-09).
       const size = await page.evaluate<{ w: number; h: number }>(
@@ -979,7 +1011,7 @@ export class BrowserSession {
         await page.evaluate(`window.scrollTo(${x}, ${y})`).catch(() => undefined)
         // Wait two animation frames so the segment is painted before capture.
         await page.evaluate('new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))').catch(() => undefined)
-        buffers.push(await page.screenshot({ type, quality }))
+        buffers.push(await captureWithBudget(page, type, quality, budget))
         capturedWidth = Math.max(capturedWidth, x + vpW)
         capturedHeight = Math.max(capturedHeight, y + vpH)
       }
