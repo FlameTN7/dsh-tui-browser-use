@@ -20,6 +20,7 @@ import { t } from './i18n.js'
 import { effectiveViewport } from './capabilities.js'
 import { requestUrl, displayUrl } from './download-url.js'
 import { DEFAULT_MAX_IMAGE_BYTES } from './image-pipeline.js'
+import { DEFAULT_SENSITIVE_QUERY_KEYS, loadRuntimeEnv, type RuntimeEnv } from './runtime-env.js'
 
 // ── Structural Playwright types (no hard dependency) ─────────────────────
 
@@ -175,10 +176,8 @@ interface PwModule {
  * can select `firefox` or `webkit` for cross-engine coverage. Falls back to
  * chromium if the selected engine isn't installed.
  */
-function browserEngine(): 'chromium' | 'firefox' | 'webkit' {
-  const v = process.env.DSH_TUI_BROWSER_ENGINE
-  if (v === 'firefox' || v === 'webkit') return v
-  return 'chromium'
+function browserEngine(env: RuntimeEnv): 'chromium' | 'firefox' | 'webkit' {
+  return env.engine
 }
 
 // Chromium running as root in a headless container needs these flags or the
@@ -191,8 +190,8 @@ const CONTAINER_LAUNCH_ARGS = ['--no-sandbox', '--disable-dev-shm-usage', '--dis
  * `DSH_TUI_BROWSER_NO_SANDBOX=1`. A normal non-root user keeps Chromium's
  * sandbox (process isolation) intact — we don't silently disable security.
  */
-function chromiumNeedsContainerArgs(): boolean {
-  if (process.env.DSH_TUI_BROWSER_NO_SANDBOX === '1') return true
+function chromiumNeedsContainerArgs(noSandbox: boolean): boolean {
+  if (noSandbox) return true
   try { return typeof process.getuid === 'function' && process.getuid() === 0 } catch { return false }
 }
 
@@ -201,9 +200,9 @@ function chromiumNeedsContainerArgs(): boolean {
  * needs `--no-sandbox`/`--disable-dev-shm-usage`/`--disable-gpu`; Firefox/WebKit
  * do not take chromium's GPU/sandbox flags, so pass an empty args array.
  */
-function engineLaunchArgs(engine: 'chromium' | 'firefox' | 'webkit'): string[] {
+function engineLaunchArgs(engine: 'chromium' | 'firefox' | 'webkit', noSandbox: boolean): string[] {
   if (engine !== 'chromium') return []
-  return chromiumNeedsContainerArgs() ? CONTAINER_LAUNCH_ARGS : []
+  return chromiumNeedsContainerArgs(noSandbox) ? CONTAINER_LAUNCH_ARGS : []
 }
 
 /**
@@ -214,11 +213,10 @@ function engineLaunchArgs(engine: 'chromium' | 'firefox' | 'webkit'): string[] {
  * pages, tests, or same-host services; `DSH_TUI_BROWSER_PROXY_BYPASS` overrides
  * the bypass list (comma-separated). Empty/absent means direct connect.
  */
-function browserProxy(cfgProxy?: string): { server: string; bypass?: string } | undefined {
-  const v = cfgProxy && cfgProxy.length > 0 ? cfgProxy : process.env.DSH_TUI_BROWSER_PROXY
+function browserProxy(cfgProxy: string | undefined, env: RuntimeEnv): { server: string; bypass?: string } | undefined {
+  const v = cfgProxy && cfgProxy.length > 0 ? cfgProxy : env.proxyServer
   if (!v || v.length === 0) return undefined
-  const bypass = process.env.DSH_TUI_BROWSER_PROXY_BYPASS ??
-    'localhost,127.0.0.1,::1,10.0.8.1'
+  const bypass = env.proxyBypass ?? 'localhost,127.0.0.1,::1,10.0.8.1'
   return { server: v, bypass }
 }
 
@@ -227,10 +225,8 @@ function browserProxy(cfgProxy?: string): { server: string; bypass?: string } | 
  * block the page and would otherwise hang an agent action; Playwright auto-dismisses
  * them, but we make the behavior explicit and configurable.
  */
-function dialogMode(): 'accept' | 'dismiss' | 'ignore' {
-  const v = process.env.DSH_TUI_BROWSER_DIALOG
-  if (v === 'accept' || v === 'ignore') return v
-  return 'dismiss'
+function dialogMode(env: RuntimeEnv): 'accept' | 'dismiss' | 'ignore' {
+  return env.dialog
 }
 
 /**
@@ -357,12 +353,6 @@ export function splitSaveStem(savePath: string): { dir: string; stem: string } {
 }
 
 /** Numeric env override helper: returns the parsed value or the fallback. */
-function envNum(name: string, fallback: number): number {
-  const v = process.env[name]
-  const n = v ? Number.parseFloat(v) : NaN
-  return Number.isFinite(n) && n >= 0 ? n : fallback
-}
-
 /** JPEG quality staircase steps (descending), never going above `base`, floor at 40. */
 function jpegQualitySteps(base: number): number[] {
   const b = Number.isFinite(base) && base > 0 ? base : 80
@@ -400,16 +390,19 @@ async function captureWithBudget(
 // redacting so a page's auth state never leaks into the model context. The
 // query-key list is configurable via DSH_TUI_BROWSER_SENSITIVE_QUERY_KEYS.
 
-const SENSITIVE_QUERY_KEYS = (process.env.DSH_TUI_BROWSER_SENSITIVE_QUERY_KEYS ?? 'token,key,signature,sig,secret,api_key,apikey,access_token,session,cred,auth')
-  .split(',').map((s) => s.trim()).filter(Boolean)
-
-/** Scrub sensitive query params from a URL; best-effort, never throws. */
-export function sanitizeUrl(raw: string): string {
+/**
+ * Scrub sensitive query params from a URL; best-effort, never throws. The
+ * `sensitiveKeys` default comes from the runtime env, but a caller that holds a
+ * `RuntimeEnv` passes its own list so a live `/settings`-visible override is
+ * honoured. Keeping the default here lets tests and external callers use the
+ * function without threading an env object through.
+ */
+export function sanitizeUrl(raw: string, sensitiveKeys: string[] = DEFAULT_SENSITIVE_QUERY_KEYS): string {
   if (!raw) return raw
   try {
     const u = new URL(raw)
     for (const key of [...u.searchParams.keys()]) {
-      if (SENSITIVE_QUERY_KEYS.some((k) => key.toLowerCase().includes(k.toLowerCase()))) {
+      if (sensitiveKeys.some((k) => key.toLowerCase().includes(k.toLowerCase()))) {
         u.searchParams.delete(key)
       }
     }
@@ -465,15 +458,19 @@ export class BrowserSession {
   private networkLog: string[] = []
   private static readonly CAPTURE_CAP = 500
 
-  constructor(config: BrowserUseConfig, lang: 'zh' | 'en') {
+  /** The injected runtime environment (timeouts, dialog, session paths, ...). */
+  private readonly env: RuntimeEnv
+
+  constructor(config: BrowserUseConfig, lang: 'zh' | 'en', env: RuntimeEnv = loadRuntimeEnv()) {
     this.config = config
     this.lang = lang
-    this.navTimeoutMs = envNum('DSH_TUI_BROWSER_TIMEOUT_NAVIGATION', 45_000)
-    this.actionTimeoutMs = envNum('DSH_TUI_BROWSER_TIMEOUT_ACTION', 12_000)
-    this.settleTimeoutMs = envNum('DSH_TUI_BROWSER_TIMEOUT_SETTLE', 6_000)
-    this.dialog = dialogMode()
-    this.userDataDir = process.env.DSH_TUI_BROWSER_USER_DATA_DIR || undefined
-    this.storageStatePath = process.env.DSH_TUI_BROWSER_STORAGE_STATE || undefined
+    this.env = env
+    this.navTimeoutMs = env.navTimeoutMs
+    this.actionTimeoutMs = env.actionTimeoutMs
+    this.settleTimeoutMs = env.settleTimeoutMs
+    this.dialog = env.dialog
+    this.userDataDir = env.userDataDir
+    this.storageStatePath = env.storageStatePath
   }
 
   /**
@@ -576,8 +573,8 @@ export class BrowserSession {
       return false
     }
     try {
-      const proxy = browserProxy(this.config.proxy)
-      const engine = browserEngine()
+      const proxy = browserProxy(this.config.proxy, this.env)
+      const engine = browserEngine(this.env)
       // Non-chromium engines (firefox/webkit): use the bundled binary, no
       // channel/executable probe (they don't ship per-engine system channels).
       if (engine !== 'chromium') {
@@ -588,10 +585,10 @@ export class BrowserSession {
           this.page = null
           return false
         }
-        this.engine = await inject.launch({ headless: true, args: engineLaunchArgs(engine), ...(proxy ? { proxy } : {}) })
+        this.engine = await inject.launch({ headless: true, args: engineLaunchArgs(engine, this.env.noSandbox), ...(proxy ? { proxy } : {}) })
       } else {
         // Probe system Chrome first (fewest install friction on most dev boxes).
-        const chromiumArgs = engineLaunchArgs('chromium')
+        const chromiumArgs = engineLaunchArgs('chromium', this.env.noSandbox)
         try {
           this.engine = await pw.chromium.launch({ channel: 'chrome', headless: true, args: chromiumArgs, ...(proxy ? { proxy } : {}), ...(this.userDataDir ? { userDataDir: this.userDataDir } : {}) })
         } catch {
@@ -642,15 +639,15 @@ export class BrowserSession {
       // failing XHR is visible in `browser_network_requests` (P1-09). URLs are
       // sanitized so query tokens never leak (P1-04).
       this.page.on('request', (r) => {
-        this.networkLog.push(`REQ ${r.method()} ${sanitizeUrl(r.url())}`)
+        this.networkLog.push(`REQ ${r.method()} ${sanitizeUrl(r.url(), this.env.sensitiveQueryKeys)}`)
         if (this.networkLog.length > BrowserSession.CAPTURE_CAP) this.networkLog.shift()
       })
       this.page.on('response', (r) => {
-        this.networkLog.push(`${r.status()} ${sanitizeUrl(r.url())}`)
+        this.networkLog.push(`${r.status()} ${sanitizeUrl(r.url(), this.env.sensitiveQueryKeys)}`)
         if (this.networkLog.length > BrowserSession.CAPTURE_CAP) this.networkLog.shift()
       })
       this.page.on('requestfailed', (r) => {
-        this.networkLog.push(`<no-response> ${sanitizeUrl(r.url())}`)
+        this.networkLog.push(`<no-response> ${sanitizeUrl(r.url(), this.env.sensitiveQueryKeys)}`)
         if (this.networkLog.length > BrowserSession.CAPTURE_CAP) this.networkLog.shift()
       })
       this.startError = null
@@ -707,7 +704,7 @@ export class BrowserSession {
         title: await page.title(),
         // R-11: sanitize the resolved URL so a signed/token-carrying redirect
         // target never leaks into the model context.
-        url: sanitizeUrl(resp?.url() ?? params.url),
+        url: sanitizeUrl(resp?.url() ?? params.url, this.env.sensitiveQueryKeys),
         status: resp?.status() ?? null,
       }
     } catch (err) {
@@ -728,7 +725,7 @@ export class BrowserSession {
       await waitForLocator(locator, this.actionTimeoutMs)
       await locator.first().click()
       await page.waitForLoadState('load').catch(() => undefined)
-      return { success: true, newUrl: sanitizeUrl(page.url() || before) }
+      return { success: true, newUrl: sanitizeUrl(page.url() || before, this.env.sensitiveQueryKeys) }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
@@ -764,7 +761,7 @@ export class BrowserSession {
     const page = this.requirePage()
     await page.waitForLoadState('load').catch(() => undefined)
     await page.evaluate('new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))').catch(() => undefined)
-    return { title: await page.title(), url: sanitizeUrl(resp?.url() ?? fallbackUrl), status: resp?.status() ?? null }
+    return { title: await page.title(), url: sanitizeUrl(resp?.url() ?? fallbackUrl, this.env.sensitiveQueryKeys), status: resp?.status() ?? null }
   }
 
   async back(): Promise<NavigationResult> {
@@ -995,7 +992,7 @@ export class BrowserSession {
     // under the maxTiles cap: filling a whole band (all columns) before moving
     // down means truncation drops the BOTTOM of the page (the same semantic as a
     // tall page), never an entire right-hand column while a band is half-read.
-    const maxTiles = this.config.tiling.maxTiles ?? envNum('DSH_TUI_BROWSER_MAX_TILES', 24)
+    const maxTiles = this.config.tiling.maxTiles ?? this.env.maxTiles
     const neededCols = pageW > vpW ? Math.ceil((pageW - vpW) / stepX) + 1 : 1
     const neededRows = pageH > vpH ? Math.ceil((pageH - vpH) / stepY) + 1 : 1
     const segmentsTotal = neededCols * neededRows
@@ -1053,7 +1050,7 @@ export class BrowserSession {
         if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true })
       }
       writeFileSync(outPath, buf)
-      return { url: sanitizeUrl(page.url()), path: outPath, bytes: buf.length }
+      return { url: sanitizeUrl(page.url(), this.env.sensitiveQueryKeys), path: outPath, bytes: buf.length }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
@@ -1088,7 +1085,7 @@ export class BrowserSession {
       }
       writeFileSync(outPath, buf)
       return {
-        url: displayUrl(params.url, resp.url() ?? params.url),
+        url: displayUrl(params.url, resp.url() ?? params.url, this.env.sensitiveQueryKeys),
         path: outPath,
         bytes: buf.length,
         contentType: resp.headers()['content-type'],
@@ -1221,7 +1218,7 @@ export class BrowserSession {
       const raw = (typeof nodes === 'object' && nodes && 'nodes' in nodes && Array.isArray((nodes as { nodes: SnapshotNode[] }).nodes))
         ? (nodes as { nodes: SnapshotNode[]; total?: number; truncated?: boolean })
         : { nodes: nodes as SnapshotNode[], total: undefined, truncated: undefined }
-      const out = raw.nodes.map((n) => (n.href ? { ...n, href: sanitizeUrl(n.href) } : n))
+      const out = raw.nodes.map((n) => (n.href ? { ...n, href: sanitizeUrl(n.href, this.env.sensitiveQueryKeys) } : n))
       return { nodes: out, ...(raw.total !== undefined ? { total: raw.total } : {}), ...(raw.truncated !== undefined ? { truncated: raw.truncated } : {}) }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)

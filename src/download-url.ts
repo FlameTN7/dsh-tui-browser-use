@@ -21,8 +21,9 @@ export function requestUrl(raw: string): string {
 /**
  * The URL shown in results/errors — sanitized. Prefers the response's final URL
  * (after redirects) when present, else the raw URL, and scrubs sensitive query
- * keys on either.
+ * keys on either. The `sensitiveKeys` come from the runtime env so a caller can
+ * honour a configured override; it defaults to the built-in set when omitted.
  */
-export function displayUrl(raw: string, final: string): string {
-  return sanitizeUrl(final || raw)
+export function displayUrl(raw: string, final: string, sensitiveKeys?: string[]): string {
+  return sanitizeUrl(final || raw, sensitiveKeys)
 }

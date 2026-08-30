@@ -30,6 +30,7 @@ import { t, type Lang } from './i18n.js'
 import { prepareScreenshot } from './image-pipeline.js'
 import { validateJsonSchema, parseJsonReply, type SchemaNode } from './schema-validate.js'
 import { effectiveViewport } from './capabilities.js'
+import type { RuntimeEnv } from './runtime-env.js'
 
 /** The runtime dependencies a tool needs when it executes. */
 export interface ToolDeps {
@@ -39,6 +40,8 @@ export interface ToolDeps {
   /** Effective vision mode for this call (a getter, so a live `/settings` edit takes effect immediately). */
   visionMode(): 'auto' | 'on' | 'off' | 'deepseek-file-api'
   lang: 'zh' | 'en'
+  /** Centralised runtime environment (cost rates, file expiry, ...). */
+  runtimeEnv: RuntimeEnv
 }
 
 /** A structurally-shaped tool definition the harness `ctx.tools.register` accepts. */
@@ -377,7 +380,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
           if (visionActive && cap.images.length > 0) {
             const { analyzeImages } = await import('./vision.js')
             const instruction = [p.instruction, cap.tilingNote].filter(Boolean).join(' ')
-            const res = await analyzeImages(env, cap.images, instruction || undefined, abortSignalOf(exec, 60_000))
+            const res = await analyzeImages(env, cap.images, instruction || undefined, abortSignalOf(exec, 60_000), deps.runtimeEnv)
             insight = res.insight || t('screenshot.insight.empty', lang)
             fileId = cap.images[0]?.fileId ?? ''
           }
@@ -495,7 +498,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
 
           try {
             const { data, usage } = await extractWithRetry(
-              (callInstruction) => analyzeImages(env, cap.images, callInstruction, abortSignalOf(exec, 60_000)),
+              (callInstruction) => analyzeImages(env, cap.images, callInstruction, abortSignalOf(exec, 60_000), deps.runtimeEnv),
               p.schema as SchemaNode,
               instruction,
             )
@@ -543,7 +546,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
               ? ` You have used about ${steps}/${maxSteps} steps. Finish now with {"action":"done","answer":"..."} — prefer a partial result over exhausting the budget.`
               : ''
             const res = await analyzeImages(env, cap.images,
-              `You are a browser automation agent. Task: ${p.instruction}. Look at the current screenshot and choose the NEXT single action that advances the task. Reply ONLY with a JSON object, one of: {"action":"click","selector":"..."}, {"action":"type","selector":"...","text":"..."}, {"action":"navigate","url":"..."}, {"action":"scroll","x":0,"y":300}, {"action":"press","key":"Enter"}, {"action":"wait","ms":500}, {"action":"hover","selector":"..."}, or {"action":"done","answer":"..."}. Prefer visible text selectors. Do not wrap in markdown.${budgetNote}${cap.tilingNote ? ` ${cap.tilingNote}` : ''}`, abortSignalOf(exec, 120_000))
+              `You are a browser automation agent. Task: ${p.instruction}. Look at the current screenshot and choose the NEXT single action that advances the task. Reply ONLY with a JSON object, one of: {"action":"click","selector":"..."}, {"action":"type","selector":"...","text":"..."}, {"action":"navigate","url":"..."}, {"action":"scroll","x":0,"y":300}, {"action":"press","key":"Enter"}, {"action":"wait","ms":500}, {"action":"hover","selector":"..."}, or {"action":"done","answer":"..."}. Prefer visible text selectors. Do not wrap in markdown.${budgetNote}${cap.tilingNote ? ` ${cap.tilingNote}` : ''}`, abortSignalOf(exec, 120_000), deps.runtimeEnv)
             cost = accumulateUsage(cost, res.usage)
             const action = parseJsonReply(res.insight) as { action?: string; selector?: string; text?: string; url?: string; key?: string; x?: number; y?: number; ms?: number; answer?: string } | undefined
             if (!action?.action) { answer = 'Could not interpret the page.'; done = true; break }

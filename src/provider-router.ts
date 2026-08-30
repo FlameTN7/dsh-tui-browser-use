@@ -65,12 +65,6 @@ export const ROUTE_ENV = {
   proxy: 'DSH_TUI_BROWSER_PROXY',
 } as const
 
-/** Read `process.env` for one of the route overrides; empty/absent yields undefined. */
-function envOf(name: string): string | undefined {
-  const v = process.env[name]
-  return v && v.length > 0 ? v : undefined
-}
-
 /** Confirm a string is a non-empty provider id in the route table. */
 function isKnownProvider(p: string): p is keyof typeof ROUTES {
   return Object.prototype.hasOwnProperty.call(ROUTES, p)
@@ -79,26 +73,27 @@ function isKnownProvider(p: string): p is keyof typeof ROUTES {
 /**
  * Resolve the active provider id. Priority: `deepseek-file-api` vision mode
  * forces the official DeepSeek (the only path using the Files API), then the
- * `DSH_TUI_BROWSER_PROVIDER` env override, then the caller-chosen default.
+ * `providerOverride` (resolved from `DSH_TUI_BROWSER_PROVIDER` by the runtime
+ * env), then the caller-chosen default.
  */
-export function resolveProvider(forceFileApi: boolean): string {
+export function resolveProvider(forceFileApi: boolean, providerOverride?: string): string {
   if (forceFileApi) return 'deepseek'
-  return envOf(ROUTE_ENV.provider) ?? 'deepseek'
+  return providerOverride ?? 'deepseek'
 }
 
 /**
- * Resolve the full route info for a provider, applying env overrides for the
- * base URL and model (so a user can point at a gateway without editing code).
+ * Resolve the full route info for a provider, applying overrides for the base
+ * URL and model (so a user can point at a gateway without editing code). The
+ * overrides come from the runtime env (`DSH_TUI_BROWSER_BASE_URL` / `_MODEL`).
  * Unknown providers get a permissive OpenAI-compatible route (base64 inline)
- * with a generic `OPENAI_API_KEY` credential env; they must also set
- * `DSH_TUI_BROWSER_MODEL` — an unknown route never falls back to a DeepSeek
- * model or key, because that would send the wrong credentials/model to a
- * foreign endpoint.
+ * with a generic `OPENAI_API_KEY` credential env; they must also set a model —
+ * an unknown route never falls back to a DeepSeek model or key, because that
+ * would send the wrong credentials/model to a foreign endpoint.
  */
-export function resolveRoute(provider: string): ProviderRouteInfo {
+export function resolveRoute(provider: string, overrides?: { baseUrl?: string; model?: string }): ProviderRouteInfo {
   const known = isKnownProvider(provider) ? ROUTES[provider] : undefined
-  const baseURL = envOf(ROUTE_ENV.baseUrl) ?? known?.baseURL ?? 'https://api.openai.com/v1'
-  const model = envOf(ROUTE_ENV.model) ?? known?.defaultModel ?? ''
+  const baseURL = overrides?.baseUrl ?? known?.baseURL ?? 'https://api.openai.com/v1'
+  const model = overrides?.model ?? known?.defaultModel ?? ''
   const apiKeyEnv = known?.apiKeyEnv ?? 'OPENAI_API_KEY'
   const api = known?.api ?? 'openai-completions'
   return { provider, baseURL, apiKeyEnv, defaultModel: model, api }

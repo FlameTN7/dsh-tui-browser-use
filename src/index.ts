@@ -22,6 +22,7 @@ import { registerTools } from './tools.js'
 import { registerSettingsSection } from './settings-section.js'
 import { resolveProvider, resolveRoute } from './provider-router.js'
 import { detectCapability } from './capabilities.js'
+import { loadRuntimeEnv, type RuntimeEnv } from './runtime-env.js'
 import type { BrowserUseConfig, ProviderOverride, ImageTransfer, VisionMode, ScreenshotFormat, TilingMode } from './types.js'
 import type { VisionEnv } from './vision.js'
 
@@ -111,11 +112,6 @@ type CredentialsLike = {
   read?(ref: unknown): Promise<unknown>
   resolve?(ref: unknown): Promise<unknown>
   [key: string]: unknown
-}
-
-function envOr<T>(key: string, fallback: T): T | string {
-  const env = process.env[key]
-  return env && env.length > 0 ? env : fallback
 }
 
 /**
@@ -249,6 +245,13 @@ export function apply(ctx: Context, config: Config): void {
     proxy: config.proxy,
   }
 
+  // Centralised runtime environment (the single place env vars are read). All
+  // DSH_TUI_* overrides live here; modules consume this value object instead of
+  // reading `process.env` themselves (AGENTS.md §2 / 竞品 B3). The only env
+  // reads that stay in this harness boundary are the async credentials seam
+  // (`probeSecretAsync`) and the host UI language (`defaultLang`).
+  const runtimeEnv = loadRuntimeEnv()
+
   // Resolve the vision request environment from the provider route table +
   // harness credentials. Provider/model can be overridden by env vars
   // (DSH_TUI_BROWSER_PROVIDER / _MODEL / _BASE_URL); the API key comes from
@@ -259,8 +262,8 @@ export function apply(ctx: Context, config: Config): void {
     if (visionMode === 'off') return null
 
     const forceFileApi = visionMode === 'deepseek-file-api'
-    const provider = resolveProvider(forceFileApi)
-    const route = resolveRoute(provider)
+    const provider = resolveProvider(forceFileApi, runtimeEnv.providerOverride)
+    const route = resolveRoute(provider, { baseUrl: runtimeEnv.baseUrlOverride, model: runtimeEnv.modelOverride })
     const currentModel = route.defaultModel
 
     // Single source of truth for vision support + transfer. Priority (proposal
@@ -282,7 +285,7 @@ export function apply(ctx: Context, config: Config): void {
     const apiKey = await probeSecretAsync(ctx, apiKeyEnvs)
     if (!apiKey) return null
 
-    const baseUrl = envOr('DEEPSEEK_BASE_URL', '') || route.baseURL
+    const baseUrl = runtimeEnv.deepseekBaseUrl || route.baseURL
 
     // Transfer mode: explicit `deepseek-file-api` wins, then the resolved
     // capability (which already honours the user provider override / table).
@@ -300,15 +303,15 @@ export function apply(ctx: Context, config: Config): void {
 
   // Browser session, shared across all tool calls in this plugin fiber. Shares
   // the `effective` config reference so a live settings edit is reflected here.
-  const session = new BrowserSession(effective, lang)
+  const session = new BrowserSession(effective, lang, runtimeEnv)
 
   // Register the toolset on the harness tool runtime. `visionMode` is a getter
   // so a live `/settings` change is honoured on the very next tool call.
-  const disposer = registerTools(ctx, { session, resolveVisionEnv, visionMode: () => effective.visionMode, lang })
+  const disposer = registerTools(ctx, { session, resolveVisionEnv, visionMode: () => effective.visionMode, lang, runtimeEnv })
 
   // Register the dsh-tui settings section (soft-probed; may be absent).
   const debug = (msg: string): void => {
-    if (process.env.DSH_TUI_BROWSER_DEBUG) process.stderr.write(`[dsh-tui-browser-use] ${msg}\n`)
+    if (runtimeEnv.debug) process.stderr.write(`[dsh-tui-browser-use] ${msg}\n`)
   }
   const settingsDisposer = registerSettingsSection(ctx, debug)
 
@@ -381,7 +384,7 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   // Diagnostics: confirm the tools actually registered and the seam shape.
-  if (process.env.DSH_TUI_BROWSER_DEBUG) {
+  if (runtimeEnv.debug) {
     const probe = (label: string): void => {
       const viaGet = ctx.get('tools', false) as { schemas?(): Array<{ name: string }> } | undefined
       const names = (viaGet?.schemas?.() ?? []).map((s) => s.name)
