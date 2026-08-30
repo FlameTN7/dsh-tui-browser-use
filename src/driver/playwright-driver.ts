@@ -210,6 +210,7 @@ export class PlaywrightDriver implements BrowserDriver {
       this._startError = `browser-launch-failed:${msg}`
       this._engine = null
       this._page = null
+      this._ctx = null
       return false
     }
   }

@@ -498,6 +498,14 @@ export class BrowserSession {
     })
     if (!started) {
       this.startError = this.driver.startError ?? t('error.browser-missing', this.lang)
+      // Release the lock acquired above (P1-1): a failed start must not
+      // poison later attempts — otherwise the next ensureStarted() sees its
+      // own live PID in the lock and degrades to isolated forever.
+      if (this.sessionLocked && this.sessionPaths.lockPath) {
+        releaseLock(this.sessionPaths.lockPath)
+        this.sessionLocked = false
+      }
+      this.degraded = false
       this.page = null
       this.ctx = null
       return false
