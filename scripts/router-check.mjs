@@ -31,14 +31,32 @@ assert.equal(legacy.baseURL, 'https://api.openai.com/v1')
 assert.equal(legacy.apiKeyEnv, 'OPENAI_API_KEY')
 assert.equal(legacy.defaultModel, '')
 
-// Model vision capability
+// Pure name-based helper (kept for tests/docs; NOT the runtime path). It only
+// looks for a `vision|vl|visual` hint, so gpt-4o/5 / claude-4 / gemini-3 are
+// "no hint" here — that's expected; detectCapability below is the real judge.
 assert.equal(isVisionCapableModel('deepseek', 'deepseek-v4-flash-vision-exp'), true, 'vision exp model')
 assert.equal(isVisionCapableModel('deepseek', 'deepseek-v4-flash'), false, 'text-only deepseek-v4-flash')
 assert.equal(isVisionCapableModel('openai', 'gpt-4-vision-preview'), true, 'model-name fallback (vision)')
-assert.equal(isVisionCapableModel('openai', 'gpt-4o'), false, 'no vision hint → text-only route')
 assert.equal(isVisionCapableModel('unknown', 'DeepSeek-V4-Flash-0731'), false, 'text-only flash')
 
-const cap = detectCapability('deepseek', 'deepseek-v4-flash', [])
-assert.equal(cap.supportsVision, true, 'deepseek builtin claims vision (route-level)')
+// detectCapability is the single runtime entry: it applies user override →
+// built-in model-family table → name fallback → default no vision.
+// Text-only DeepSeek model must short-circuit (AGENTS.md §6).
+assert.equal(detectCapability('deepseek', 'deepseek-v4-flash', []).supportsVision, false, 'deepseek-v4-flash text-only short-circuit')
+assert.equal(detectCapability('deepseek', 'deepseek-v4-flash-vision-exp', []).supportsVision, true, 'deepseek vision exp')
+
+// Modern multimodal families that don't carry a "vision" name must be detected.
+assert.equal(detectCapability('openai', 'gpt-4o', []).supportsVision, true, 'openai gpt-4o multimodal')
+assert.equal(detectCapability('openai', 'gpt-5', []).supportsVision, true, 'openai gpt-5 multimodal')
+assert.equal(detectCapability('anthropic', 'claude-4-5-sonet', []).supportsVision, true, 'anthropic claude-4 multimodal')
+assert.equal(detectCapability('google', 'gemini-3.1-pro', []).supportsVision, true, 'google gemini-3 multimodal')
+
+// Empty model on an unknown route defaults to no vision (must set DSH_TUI_BROWSER_MODEL).
+assert.equal(detectCapability('unknown-route', '', []).supportsVision, false, 'empty model → no vision')
+assert.equal(detectCapability('openai', '', []).supportsVision, false, 'empty model on known provider → no vision')
+
+// User override wins over the built-in table (both directions).
+assert.equal(detectCapability('openai', 'gpt-4o', [{ provider: 'openai', supportsVision: false, imageTransfer: 'none' }]).supportsVision, false, 'override false wins')
+assert.equal(detectCapability('deepseek', 'deepseek-v4-flash', [{ provider: 'deepseek', supportsVision: true, imageTransfer: 'file' }]).supportsVision, true, 'override true forces vision')
 
 console.log('[router-check] OK: providers=' + JSON.stringify(KNOWN_PROVIDERS))

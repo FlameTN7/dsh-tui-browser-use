@@ -20,8 +20,8 @@ import Schema from '@deepseek-ai/schemastery'
 import { BrowserSession } from './browser.js'
 import { registerTools } from './tools.js'
 import { registerSettingsSection } from './settings-section.js'
-import { resolveProvider, resolveRoute, resolveTransfer } from './provider-router.js'
-import { isVisionCapableModel } from './capabilities.js'
+import { resolveProvider, resolveRoute } from './provider-router.js'
+import { detectCapability } from './capabilities.js'
 import type { BrowserUseConfig, ProviderOverride, ImageTransfer, VisionMode, ScreenshotFormat, TilingMode } from './types.js'
 import type { VisionEnv } from './vision.js'
 
@@ -263,15 +263,15 @@ export function apply(ctx: Context, config: Config): void {
     const route = resolveRoute(provider)
     const currentModel = route.defaultModel
 
-    // A text-only model (e.g. `deepseek-v4-flash`) cannot read a screenshot;
-    // degrade to DOM fallback (null) rather than sending it a vision request.
-    if (!isVisionCapableModel(provider, currentModel)) return null
-
-    // A user-provider override may explicitly disable vision for a model that
-    // would otherwise look capable (P1-01): `supportsVision: false` must degrade
-    // to DOM even for a vision-capable route.
-    const over = effective.providers.find((p) => p.provider.toLowerCase() === provider.toLowerCase())
-    if (over?.supportsVision === false) return null
+    // Single source of truth for vision support + transfer. Priority (proposal
+    // §5.1): user override → provider declaration → built-in table (model-level
+    // fine-tuning) → model-name fallback → default no vision. This correctly
+    // accepts modern multimodal models that don't carry "vision" in their name
+    // (gpt-5, claude-4-5-sonet, gemini-3.1-pro) while a text-only DeepSeek model
+    // (deepseek-v4-flash) short-circuits to DOM, and a `supportsVision:false`
+    // override still degrades to DOM (P1-01).
+    const capability = detectCapability(provider, currentModel, effective.providers)
+    if (!capability.supportsVision) return null
 
     // Non-deepseek routes must NOT fall back to the official DeepSeek key — a
     // different provider's credential would be sent to a foreign endpoint. Only
@@ -284,15 +284,9 @@ export function apply(ctx: Context, config: Config): void {
 
     const baseUrl = envOr('DEEPSEEK_BASE_URL', '') || route.baseURL
 
-    // Transfer mode: explicit `deepseek-file-api` wins, then env override, then
-    // the user's provider override, then the route table (deepseek=file,
-    // unknown OpenAI-compatible=base64).
-    let imageTransfer: ImageTransfer
-    if (forceFileApi) {
-      imageTransfer = 'file'
-    } else {
-      imageTransfer = over?.imageTransfer ?? resolveTransfer(provider, false)
-    }
+    // Transfer mode: explicit `deepseek-file-api` wins, then the resolved
+    // capability (which already honours the user provider override / table).
+    const imageTransfer: ImageTransfer = forceFileApi ? 'file' : capability.imageTransfer
 
     return {
       baseUrl,

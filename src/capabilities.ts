@@ -16,14 +16,40 @@
 
 import type { BrowserUseConfig, ImageTransfer, ProviderCapability, ProviderOverride } from './types.js'
 
-/** Built-in capability table for known providers. */
-const BUILTIN: Record<string, { supportsVision: boolean; imageTransfer: ImageTransfer; detail: 'high' | 'low' }> = {
-  // Official DeepSeek with a vision model: images ride the Files API.
-  deepseek: { supportsVision: true, imageTransfer: 'file', detail: 'high' },
-  // OpenAI-compatible endpoints commonly accept base64 image_url.
-  openai: { supportsVision: true, imageTransfer: 'base64', detail: 'high' },
-  anthropic: { supportsVision: true, imageTransfer: 'base64', detail: 'high' },
-  google: { supportsVision: true, imageTransfer: 'base64', detail: 'high' },
+/**
+ * Built-in capability table for known providers. Each entry carries the
+ * transfer/detail defaults for the provider plus a model-family predicate that
+ * decides whether a specific model id accepts image input. This is what lets a
+ * vision-capable-but-not-"vision"-named model (e.g. `gpt-5`, `claude-4-5-sonet`,
+ * `gemini-3.1-pro`) be detected correctly, while a text-only model on the same
+ * route (e.g. `deepseek-v4-flash`) still short-circuits to DOM.
+ */
+const BUILTIN: Record<string, { imageTransfer: ImageTransfer; detail: 'high' | 'low'; visionFor: (model: string) => boolean }> = {
+  // Official DeepSeek: images ride the Files API. Only the vision/glyph-capable
+  // DeepSeek models accept images; a text-only model MUST short-circuit to DOM
+  // (AGENTS.md §6).
+  deepseek: {
+    imageTransfer: 'file',
+    detail: 'high',
+    visionFor: (m) => /vision|vl|visual/i.test(m) || VISION_MODEL_IDS.has(m.trim()),
+  },
+  // OpenAI-compatible endpoints commonly accept base64 image_url. Modern
+  // multimodal families (gpt-4o*, gpt-4.1*, gpt-5*, o4*) don't carry "vision".
+  openai: {
+    imageTransfer: 'base64',
+    detail: 'high',
+    visionFor: (m) => /^(gpt-4o|gpt-4\.1|gpt-5|o[134])/i.test(m.trim()),
+  },
+  anthropic: {
+    imageTransfer: 'base64',
+    detail: 'high',
+    visionFor: (m) => /^claude-[34]/i.test(m.trim()),
+  },
+  google: {
+    imageTransfer: 'base64',
+    detail: 'high',
+    visionFor: (m) => /^gemini/i.test(m.trim()),
+  },
 }
 
 /**
@@ -109,10 +135,15 @@ export function detectCapability(
   //    don't reach into harness services from this pure module, so this step
   //    currently defers to the built-in table and model-name fallback.
 
-  // 3. Built-in table.
+  // 3. Built-in table: per-provider transfer/detail + model-family vision gate.
   const builtin = BUILTIN[name]
   if (builtin) {
-    return { provider: name, ...builtin }
+    return {
+      provider: name,
+      supportsVision: builtin.visionFor(modelName),
+      imageTransfer: builtin.imageTransfer,
+      detail: builtin.detail,
+    }
   }
 
   // 4. Model-name fallback: a model whose name advertises vision.
