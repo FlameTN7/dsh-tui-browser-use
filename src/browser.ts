@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ErrorCode, NavigateParams, NavigateResult, ClickParams, ClickResult, TypeParams, TypeResult, EvaluateParams, EvaluateResult, ScreenshotParams, StatusResult, SnapshotParams, SnapshotNode, SnapshotResult, NavigationResult, ScrollParams, ScrollResult, PressParams, PressResult, WaitParams, WaitResult, HoverParams, HoverResult, CookiesParams, CookiesResult, ConsoleMessagesParams, ConsoleMessagesResult, NetworkRequestsParams, NetworkRequestsResult, PdfParams, PdfResult, DownloadParams, DownloadResult, I18nTemplate, BrowserUseConfig, CaptureSegmentsResult } from './types.js'
 import { t } from './i18n.js'
+import { effectiveViewport } from './capabilities.js'
 
 // ── Structural Playwright types (no hard dependency) ─────────────────────
 
@@ -352,13 +353,6 @@ export function splitSaveStem(savePath: string): { dir: string; stem: string } {
   return { dir, stem }
 }
 
-/** Compute `width×height` from a viewport/config string (defaults 1024×768). */
-function dimensionPair(dim: string | undefined): { width: number; height: number } {
-  const s = (dim || '1024x768').toLowerCase()
-  const [w = 1024, h = 768] = s.split('x').map((seg) => Number.parseInt(seg.trim(), 10))
-  return { width: Number.isFinite(w) && w > 0 ? w : 1024, height: Number.isFinite(h) && h > 0 ? h : 768 }
-}
-
 /** Numeric env override helper: returns the parsed value or the fallback. */
 function envNum(name: string, fallback: number): number {
   const v = process.env[name]
@@ -461,11 +455,7 @@ export class BrowserSession {
    * `viewport` config; falls back to the deprecated `screenshot.maxDimension`
    * alias used by older configs / test scripts, then the 1024×768 default. */
   private viewportSize(): { width: number; height: number } {
-    const v = this.config.viewport
-    if (v && Number.isFinite(v.width) && Number.isFinite(v.height) && v.width > 0 && v.height > 0) {
-      return { width: v.width, height: v.height }
-    }
-    return dimensionPair(this.config.screenshot.maxDimension)
+    return effectiveViewport(this.config)
   }
 
   run<T>(task: () => Promise<T>): Promise<T> {
@@ -922,7 +912,7 @@ export class BrowserSession {
     const page = this.requirePage()
     const type = this.config.screenshot.format === 'png' ? 'png' : 'jpeg'
     const quality = type === 'jpeg' ? this.config.screenshot.quality : undefined
-    const dim = dimensionPair(this.config.screenshot.maxDimension)
+    const dim = effectiveViewport(this.config)
     const vpW = dim.width
     const vpH = dim.height
     const overlap = Math.max(0, this.config.tiling.overlap || 0)

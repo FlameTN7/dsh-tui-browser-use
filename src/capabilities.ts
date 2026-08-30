@@ -14,7 +14,7 @@
  * model name, and the user-declared overrides.
  */
 
-import type { ImageTransfer, ProviderCapability, ProviderOverride } from './types.js'
+import type { BrowserUseConfig, ImageTransfer, ProviderCapability, ProviderOverride } from './types.js'
 
 /** Built-in capability table for known providers. */
 const BUILTIN: Record<string, { supportsVision: boolean; imageTransfer: ImageTransfer; detail: 'high' | 'low' }> = {
@@ -49,6 +49,29 @@ export function isVisionCapableModel(_provider: string, model: string): boolean 
 export function parseDimension(dim: string): { width: number; height: number } {
   const [w = 0, h = 0] = dim.toLowerCase().split('x').map((s) => Number.parseInt(s.trim(), 10))
   return { width: Number.isFinite(w) ? w : 0, height: Number.isFinite(h) ? h : 0 }
+}
+
+/**
+ * Resolve the effective viewport for a config. Prefers the explicit `viewport`
+ * config; falls back to the deprecated `screenshot.maxDimension` alias (kept for
+ * older configs / test scripts); otherwise the 1024×768 default.
+ *
+ * This is the single source of truth for the real browser viewport, so
+ * scrolling/tiling stepping in `BrowserSession.captureSegments()` and the tool
+ * prepare options always match the viewport the live page actually uses (fixes
+ * the "viewport changed in /settings but tiling still steps by maxDimension"
+ * inconsistency).
+ */
+export function effectiveViewport(
+  config: Pick<BrowserUseConfig, 'viewport' | 'screenshot'>,
+): { width: number; height: number } {
+  const v = config.viewport
+  if (v && Number.isFinite(v.width) && Number.isFinite(v.height) && v.width > 0 && v.height > 0) {
+    return { width: v.width, height: v.height }
+  }
+  const dim = parseDimension(config.screenshot.maxDimension)
+  if (dim.width > 0 && dim.height > 0) return dim
+  return { width: 1024, height: 768 }
 }
 
 /** Find a user-declared override matching the provider name. */

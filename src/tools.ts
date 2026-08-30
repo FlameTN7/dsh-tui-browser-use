@@ -29,6 +29,7 @@ import type {
 import { t, type Lang } from './i18n.js'
 import { prepareScreenshot } from './image-pipeline.js'
 import { validateJsonSchema, parseJsonReply, type SchemaNode } from './schema-validate.js'
+import { effectiveViewport } from './capabilities.js'
 
 /** The runtime dependencies a tool needs when it executes. */
 export interface ToolDeps {
@@ -223,8 +224,9 @@ interface PreparedCapture {
  */
 async function capturePreparedImages(session: BrowserSession, lang: Lang): Promise<PreparedCapture> {
   const cap = await session.captureSegments()
-  const dim = session.config.screenshot.maxDimension
-  const [w = 1280, h = 720] = (dim || '1024x768').toLowerCase().split('x').map((s) => Number.parseInt(s, 10))
+  const dim = effectiveViewport(session.config)
+  const w = dim.width
+  const h = dim.height
   const total = cap.buffers.length
   const images = cap.buffers.map((buf, i) => {
     const [img] = prepareScreenshot(buf, {
