@@ -12,7 +12,7 @@
  * compiles without depending on the playwright type package at build time.
  */
 
-import { existsSync, openSync, readSync, closeSync, statSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs'
+import { existsSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ErrorCode, NavigateParams, NavigateResult, ClickParams, ClickResult, TypeParams, TypeResult, EvaluateParams, EvaluateResult, ScreenshotParams, StatusResult, SnapshotParams, SnapshotNode, SnapshotResult, NavigationResult, ScrollParams, ScrollResult, PressParams, PressResult, WaitParams, WaitResult, HoverParams, HoverResult, CookiesParams, CookiesResult, ConsoleMessagesParams, ConsoleMessagesResult, NetworkRequestsParams, NetworkRequestsResult, PdfParams, PdfResult, DownloadParams, DownloadResult, I18nTemplate, BrowserUseConfig, CaptureSegmentsResult } from './types.js'
@@ -21,6 +21,8 @@ import { effectiveViewport } from './capabilities.js'
 import { requestUrl, displayUrl } from './download-url.js'
 import { DEFAULT_MAX_IMAGE_BYTES } from './image-pipeline.js'
 import { DEFAULT_SENSITIVE_QUERY_KEYS, loadRuntimeEnv, type RuntimeEnv } from './runtime-env.js'
+import { PlaywrightDriver } from './driver/playwright-driver.js'
+import type { BrowserDriver } from './driver/browser-driver.js'
 
 // ── Structural Playwright types (no hard dependency) ─────────────────────
 
@@ -165,70 +167,6 @@ interface PwChromium {
 /** Common launch options shared by every Playwright browser engine. */
 type PwLaunchOptions = { channel?: string; executablePath?: string; headless?: boolean; args?: string[]; proxy?: { server: string; bypass?: string }; userDataDir?: string }
 
-interface PwModule {
-  chromium: PwChromium
-  firefox?: { launch(opts: PwLaunchOptions): Promise<PwBrowser> }
-  webkit?: { launch(opts: PwLaunchOptions): Promise<PwBrowser> }
-}
-
-/**
- * The browser engine to drive. Default `chromium`; `DSH_TUI_BROWSER_ENGINE`
- * can select `firefox` or `webkit` for cross-engine coverage. Falls back to
- * chromium if the selected engine isn't installed.
- */
-function browserEngine(env: RuntimeEnv): 'chromium' | 'firefox' | 'webkit' {
-  return env.engine
-}
-
-// Chromium running as root in a headless container needs these flags or the
-// first start can stall on the sandbox/GPU path and intermittently time out.
-const CONTAINER_LAUNCH_ARGS = ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
-
-/**
- * Whether to inject the container/root chromium flags. Only when running as
- * root (sandbox can't be used) or when the user explicitly opts in via
- * `DSH_TUI_BROWSER_NO_SANDBOX=1`. A normal non-root user keeps Chromium's
- * sandbox (process isolation) intact — we don't silently disable security.
- */
-function chromiumNeedsContainerArgs(noSandbox: boolean): boolean {
-  if (noSandbox) return true
-  try { return typeof process.getuid === 'function' && process.getuid() === 0 } catch { return false }
-}
-
-/**
- * Launch args appropriate to the engine. Chromium-as-root in this container
- * needs `--no-sandbox`/`--disable-dev-shm-usage`/`--disable-gpu`; Firefox/WebKit
- * do not take chromium's GPU/sandbox flags, so pass an empty args array.
- */
-function engineLaunchArgs(engine: 'chromium' | 'firefox' | 'webkit', noSandbox: boolean): string[] {
-  if (engine !== 'chromium') return []
-  return chromiumNeedsContainerArgs(noSandbox) ? CONTAINER_LAUNCH_ARGS : []
-}
-
-/**
- * Optional HTTP proxy for the browser when the container must reach external
- * sites through a host proxy. Prefers the plugin config `proxy` (a `/settings`
- * panel edit), then the `DSH_TUI_BROWSER_PROXY=http://host:port` env var.
- * Localhost / loopback are always bypassed so the proxy does not hijack local
- * pages, tests, or same-host services; `DSH_TUI_BROWSER_PROXY_BYPASS` overrides
- * the bypass list (comma-separated). Empty/absent means direct connect.
- */
-function browserProxy(cfgProxy: string | undefined, env: RuntimeEnv): { server: string; bypass?: string } | undefined {
-  const v = cfgProxy && cfgProxy.length > 0 ? cfgProxy : env.proxyServer
-  if (!v || v.length === 0) return undefined
-  const bypass = env.proxyBypass ?? 'localhost,127.0.0.1,::1,10.0.8.1'
-  return { server: v, bypass }
-}
-
-/**
- * How to handle a browser dialog (alert/confirm/prompt/beforeunload). Dialogs
- * block the page and would otherwise hang an agent action; Playwright auto-dismisses
- * them, but we make the behavior explicit and configurable.
- */
-function dialogMode(env: RuntimeEnv): 'accept' | 'dismiss' | 'ignore' {
-  return env.dialog
-}
-
 /**
  * Wait for a dynamically-rendered target (SPA / lazy content) to be actionable
  * before an interaction. Retries a few times because a click/type on an element
@@ -299,42 +237,6 @@ async function resolveFrameAware(page: PwPage, selector?: string, text?: string)
 }
 
 /**
- * A candidate browser binary must be a real native executable, not a distro
- * wrapper. On some distros `/usr/bin/chromium-browser` is a tiny snap stub
- * (a `#!/bin/sh` script) that fails when passed to `executablePath`, while a
- * genuine Chromium is a large ELF/Mach-O binary. Accept a file only when it is
- * either a large native binary or starts with a known executable magic.
- */
-function isRealBrowserBinary(p: string): boolean {
-  let fd: number | null = null
-  try {
-    // Read only the first few bytes to sniff the magic; never read a whole
-    // multi-hundred-MB browser binary into memory.
-    fd = openSync(p, 'r')
-    const buf = Buffer.alloc(4)
-    const n = readSync(fd, buf, 0, 4, 0)
-    // Reject shell-script wrappers (snap stubs start with `#!`).
-    if (n >= 2 && buf[0] === 0x23 && buf[1] === 0x21) return false
-    // ELF magic (Linux). Mach-O magic (macOS): FEEDFACE / CFFAEDFE.
-    // PE magic (Windows): "MZ" (4D 5A).
-    if (n >= 4) {
-      if (buf[0] === 0x7f && buf[1] === 0x45 && buf[2] === 0x4c && buf[3] === 0x46) return true
-      if (
-        (buf[0] === 0xfe && buf[1] === 0xed && buf[2] === 0xfa && buf[3] === 0xce) ||
-        (buf[0] === 0xcf && buf[1] === 0xfa && buf[2] === 0xed && buf[3] === 0xfe)
-      ) return true
-      if (buf[0] === 0x4d && buf[1] === 0x5a) return true
-    }
-  } catch {
-    return false
-  } finally {
-    if (fd !== null) { try { closeSync(fd) } catch { /* ignore */ } }
-  }
-  // Fallback: a browser binary is large; accept anything substantial even if
-  // the magic was unfamiliar.
-  try { return statSync(p).size > 20 * 1024 * 1024 } catch { return false }
-}
-
 // ── Structural config helpers ────────────────────────────────────────────
 
 /**
@@ -420,12 +322,12 @@ export function cookieValue(value: string, readValues: boolean): string {
 
 /** The long-lived browser session shared across tool calls. */
 export class BrowserSession {
-  private engine: PwBrowser | null = null
   private page: PwPage | null = null
   private ctx: PwContext | null = null
-  private pw: PwModule | null = null
   private startError: string | null = null
   private lang: 'zh' | 'en'
+  /** The injected browser backend (swappable via constructor). Defaults to Playwright. */
+  private readonly driver: BrowserDriver
   // We don't hard-require a config at construction; the plugin injects it.
   config: BrowserUseConfig
 
@@ -461,10 +363,11 @@ export class BrowserSession {
   /** The injected runtime environment (timeouts, dialog, session paths, ...). */
   private readonly env: RuntimeEnv
 
-  constructor(config: BrowserUseConfig, lang: 'zh' | 'en', env: RuntimeEnv = loadRuntimeEnv()) {
+  constructor(config: BrowserUseConfig, lang: 'zh' | 'en', env: RuntimeEnv = loadRuntimeEnv(), driver: BrowserDriver = new PlaywrightDriver()) {
     this.config = config
     this.lang = lang
     this.env = env
+    this.driver = driver
     this.navTimeoutMs = env.navTimeoutMs
     this.actionTimeoutMs = env.actionTimeoutMs
     this.settleTimeoutMs = env.settleTimeoutMs
@@ -511,154 +414,52 @@ export class BrowserSession {
     })
   }
 
-  /** Load the playwright module safely; returns null if it isn't installed. */
-  private async loadPlaywright(): Promise<PwModule | null> {
-    if (this.pw !== null) return this.pw
-    try {
-      const mod = (await import('playwright')) as unknown as PwModule
-      this.pw = mod
-      return mod
-    } catch {
-      this.pw = null
-      return null
-    }
-  }
-
-  /**
-   * Resolve an explicit browser binary, honoring `DSH_TUI_BROWSER_EXECUTABLE`
-   * then common install locations. Returns undefined to let Playwright pick its
-   * bundled Chromium. Useful in constrained containers where neither system
-   * Chrome nor a Playwright-downloaded Chromium is present but a Chromium
-   * binary exists (e.g. installed via a tarball or a distro with a snap stub).
-   */
-  private resolveExecutablePath(): string | undefined {
-    const env = process.env.DSH_TUI_BROWSER_EXECUTABLE
-    if (env) return env
-    // Platform-aware candidates: system Chromium/Chrome on Linux/macOS/Windows.
-    const candidates = [
-      '/usr/bin/chromium',
-      '/usr/bin/chromium-browser',
-      '/usr/bin/google-chrome',
-      '/usr/bin/google-chrome-stable',
-      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-    ]
-    // Scan /opt for a bundled Chromium (constrained containers commonly drop a
-    // tarball under /opt/chromium-*/chrome-linux/chrome). Avoid hard-coding a
-    // specific build number — glob the dir name instead.
-    try {
-      for (const entry of readdirSync('/opt')) {
-        const nested = join('/opt', entry, 'chrome-linux', 'chrome')
-        if (existsSync(nested) && isRealBrowserBinary(nested)) return nested
-      }
-    } catch { /* no /opt */ }
-    for (const p of candidates) {
-      if (existsSync(p) && isRealBrowserBinary(p)) return p
-    }
-    return undefined
-  }
-
   /**
    * Ensure a browser and page exist, probing sources in order:
    * system Chrome (`channel:'chrome'`) → explicit binary (`executablePath`) →
    * Playwright-bundled Chromium. `DSH_TUI_BROWSER_ENGINE` selects `firefox`/
    * `webkit` for cross-engine coverage; the chromium path stays the default.
+   * The launch + probe logic lives in the injected {@link BrowserDriver}; this
+   * session forwards the effective config/env and caches the resulting
+   * page/context for its own orchestration (run/timeout/snapshot/tiling).
    */
   async ensureStarted(): Promise<boolean> {
-    if (this.engine !== null && this.page !== null) return true
-    const pw = await this.loadPlaywright()
-    if (!pw) {
-      this.startError = t('error.browser-missing', this.lang)
-      return false
-    }
-    try {
-      const proxy = browserProxy(this.config.proxy, this.env)
-      const engine = browserEngine(this.env)
-      // Non-chromium engines (firefox/webkit): use the bundled binary, no
-      // channel/executable probe (they don't ship per-engine system channels).
-      if (engine !== 'chromium') {
-        const inject = pw[engine]
-        if (!inject) {
-          this.startError = t('error.browser-missing', this.lang) + ` (engine '${engine}' not installed)`
-          this.engine = null
-          this.page = null
-          return false
-        }
-        this.engine = await inject.launch({ headless: true, args: engineLaunchArgs(engine, this.env.noSandbox), ...(proxy ? { proxy } : {}) })
-      } else {
-        // Probe system Chrome first (fewest install friction on most dev boxes).
-        const chromiumArgs = engineLaunchArgs('chromium', this.env.noSandbox)
-        try {
-          this.engine = await pw.chromium.launch({ channel: 'chrome', headless: true, args: chromiumArgs, ...(proxy ? { proxy } : {}), ...(this.userDataDir ? { userDataDir: this.userDataDir } : {}) })
-        } catch {
-          const executablePath = this.resolveExecutablePath()
-          if (executablePath) {
-            // Fall back to an explicit binary (container / unusual install); if
-            // it still fails (e.g. an imperfect binary), fall through to the
-            // Playwright-bundled Chromium rather than surfacing the error.
-            try {
-              this.engine = await pw.chromium.launch({ executablePath, headless: true, args: chromiumArgs, ...(proxy ? { proxy } : {}), ...(this.userDataDir ? { userDataDir: this.userDataDir } : {}) })
-            } catch {
-              this.engine = await pw.chromium.launch({ headless: true, args: chromiumArgs, ...(proxy ? { proxy } : {}), ...(this.userDataDir ? { userDataDir: this.userDataDir } : {}) })
-            }
-          } else {
-            // Final fall back to the Playwright-bundled Chromium.
-            this.engine = await pw.chromium.launch({ headless: true, args: chromiumArgs, ...(proxy ? { proxy } : {}), ...(this.userDataDir ? { userDataDir: this.userDataDir } : {}) })
-          }
-        }
-      }
-      const dim = this.viewportSize()
-      // Session-state persistence (P1 #8): an explicit context is used when a
-      // storageState snapshot is configured (preloaded if it already exists) so
-      // a login state can be saved back on close. Every path keeps a context
-      // reference so cookies()/clearCookies() always have a target.
-      const ctx = await this.engine.newContext({
-        storageState: this.storageStatePath && existsSync(this.storageStatePath) ? this.storageStatePath : undefined,
-      })
-      this.ctx = ctx
-      this.page = await ctx.newPage()
-      await this.page.setViewportSize({ width: dim.width, height: dim.height })
-      // Dialog handling: by default dismiss alert/confirm/prompt so a blocking
-      // dialog cannot hang an agent action. `DSH_TUI_BROWSER_DIALOG=accept` or
-      // `ignore` opts in/out of dismissing.
-      if (this.dialog !== 'ignore') {
-        this.page.on('dialog', (d) => {
-          void (this.dialog === 'accept' ? d.accept() : d.dismiss()).catch(() => undefined)
-        })
-      }
-      // Capture console + network for the browser_console_messages / browser_network_requests
-      // tools. Both are best-effort ring buffers; a debug-friendly page can be inspected
-      // without a devtools/DRP trace.
-      this.page.on('console', (m) => {
-        this.consoleLog.push(`[${m.type()}] ${m.text()}`)
-        if (this.consoleLog.length > BrowserSession.CAPTURE_CAP) this.consoleLog.shift()
-      })
-      // Network capture records both requests and responses (and a
-      // `<no-response>` marker for failed/dropped ones, e.g. CORS/DNS) so a
-      // failing XHR is visible in `browser_network_requests` (P1-09). URLs are
-      // sanitized so query tokens never leak (P1-04).
-      this.page.on('request', (r) => {
-        this.networkLog.push(`REQ ${r.method()} ${sanitizeUrl(r.url(), this.env.sensitiveQueryKeys)}`)
-        if (this.networkLog.length > BrowserSession.CAPTURE_CAP) this.networkLog.shift()
-      })
-      this.page.on('response', (r) => {
-        this.networkLog.push(`${r.status()} ${sanitizeUrl(r.url(), this.env.sensitiveQueryKeys)}`)
-        if (this.networkLog.length > BrowserSession.CAPTURE_CAP) this.networkLog.shift()
-      })
-      this.page.on('requestfailed', (r) => {
-        this.networkLog.push(`<no-response> ${sanitizeUrl(r.url(), this.env.sensitiveQueryKeys)}`)
-        if (this.networkLog.length > BrowserSession.CAPTURE_CAP) this.networkLog.shift()
-      })
-      this.startError = null
-      return true
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      this.startError = t('error.browser-missing', this.lang) + ` (${msg})`
-      this.engine = null
+    if (this.page !== null && this.ctx !== null) return true
+    const started = await this.driver.start({
+      config: this.config,
+      env: this.env,
+      lang: this.lang,
+      handlers: {
+        onConsole: (m) => {
+          this.consoleLog.push(`[${m.type()}] ${m.text()}`)
+          if (this.consoleLog.length > BrowserSession.CAPTURE_CAP) this.consoleLog.shift()
+        },
+        onRequest: (r) => {
+          this.networkLog.push(`REQ ${r.method()} ${sanitizeUrl(r.url(), this.env.sensitiveQueryKeys)}`)
+          if (this.networkLog.length > BrowserSession.CAPTURE_CAP) this.networkLog.shift()
+        },
+        onResponse: (r) => {
+          this.networkLog.push(`${r.status()} ${sanitizeUrl(r.url(), this.env.sensitiveQueryKeys)}`)
+          if (this.networkLog.length > BrowserSession.CAPTURE_CAP) this.networkLog.shift()
+        },
+        onRequestFailed: (r) => {
+          this.networkLog.push(`<no-response> ${sanitizeUrl(r.url(), this.env.sensitiveQueryKeys)}`)
+          if (this.networkLog.length > BrowserSession.CAPTURE_CAP) this.networkLog.shift()
+        },
+      },
+    })
+    if (!started) {
+      this.startError = this.driver.startError ?? t('error.browser-missing', this.lang)
       this.page = null
+      this.ctx = null
       return false
     }
+    // Cache the driver's live page/context so the rest of the session's
+    // orchestration (run/timeout/snapshot/tiling) operates on the real handles.
+    this.page = this.driver.page
+    this.ctx = this.driver.context
+    this.startError = null
+    return true
   }
 
   private requirePage(): PwPage {
@@ -673,16 +474,14 @@ export class BrowserSession {
 
   /** Release the browser and mark the session unstarted. */
   async close(): Promise<void> {
-    if (this.engine) {
-      // Persist a login snapshot back to the configured path (best-effort).
-      if (this.storageStatePath && this.ctx) {
-        try { await this.ctx.storageState({ path: this.storageStatePath }) } catch { /* best-effort */ }
-      }
-      try { await this.engine.close() } catch { /* ignore */ }
-      this.engine = null
-      this.page = null
-      this.ctx = null
+    // Persist a login snapshot back to the configured path (best-effort) before
+    // tearing the browser down.
+    if (this.storageStatePath && this.ctx) {
+      try { await this.ctx.storageState({ path: this.storageStatePath }) } catch { /* best-effort */ }
     }
+    await this.driver.close()
+    this.page = null
+    this.ctx = null
   }
 
   // ── Tools ──────────────────────────────────────────────────────────────
@@ -1254,8 +1053,8 @@ export class BrowserSession {
   async status(): Promise<StatusResult> {
     const available = await this.ensureStarted()
     let version = 'unknown'
-    if (available && this.engine) {
-      try { version = this.engine.version() } catch { /* keep unknown */ }
+    if (available) {
+      try { version = this.driver.version() } catch { /* keep unknown */ }
     }
     return { available, version, config: structuredClone(this.config) }
   }
