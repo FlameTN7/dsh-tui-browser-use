@@ -337,6 +337,21 @@ function isRealBrowserBinary(p: string): boolean {
 
 // ── Structural config helpers ────────────────────────────────────────────
 
+/**
+ * Split a save path into its directory and a "stem" (basename minus one final
+ * extension). Unlike a bare `lastIndexOf('.')`, an extensionless path keeps its
+ * full basename as the stem (e.g. `/tmp/multi-noext` → `{dir:'/tmp/',
+ * stem:'multi-noext'}`, NOT `multi-noex`). A leading-dot file (`.hidden`) is
+ * treated as extensionless so its name is preserved.
+ */
+export function splitSaveStem(savePath: string): { dir: string; stem: string } {
+  const dir = savePath.slice(0, Math.max(savePath.lastIndexOf('/'), savePath.lastIndexOf('\\')) + 1)
+  const base = savePath.slice(dir.length)
+  const dot = base.lastIndexOf('.')
+  const stem = dot > 0 ? base.slice(0, dot) : base
+  return { dir, stem }
+}
+
 /** Compute `width×height` from a viewport/config string (defaults 1024×768). */
 function dimensionPair(dim: string | undefined): { width: number; height: number } {
   const s = (dim || '1024x768').toLowerCase()
@@ -956,7 +971,7 @@ export class BrowserSession {
     // under the maxTiles cap: filling a whole band (all columns) before moving
     // down means truncation drops the BOTTOM of the page (the same semantic as a
     // tall page), never an entire right-hand column while a band is half-read.
-    const maxTiles = this.config.tiling.maxTiles ?? envNum('DSH_TUI_BROWSER_MAX_TILES', 12)
+    const maxTiles = this.config.tiling.maxTiles ?? envNum('DSH_TUI_BROWSER_MAX_TILES', 24)
     const neededCols = pageW > vpW ? Math.ceil((pageW - vpW) / stepX) + 1 : 1
     const neededRows = pageH > vpH ? Math.ceil((pageH - vpH) / stepY) + 1 : 1
     const segmentsTotal = neededCols * neededRows
@@ -1076,9 +1091,11 @@ export class BrowserSession {
       return { savedPath: savePath, savedPaths: [savePath] }
     }
     // Multiple tiles: write `name-1.ext`, `name-2.ext`, ... beside `savePath`.
-    const stem = savePath.slice(0, savePath.lastIndexOf('.')) || savePath
+    // Use the shared `splitSaveStem` so an extensionless path keeps its stem
+    // intact (e.g. `/tmp/multi-noext` → `multi-noext-1.png`, NOT `multi-noex-1.png`).
+    const { dir, stem } = splitSaveStem(savePath)
     buffers.forEach((buf, i) => {
-      const p = `${stem}-${i + 1}.${ext}`
+      const p = `${dir}${stem}-${i + 1}.${ext}`
       writeFileSync(p, buf)
       saved.push(p)
     })

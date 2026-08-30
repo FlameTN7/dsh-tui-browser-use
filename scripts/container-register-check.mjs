@@ -87,14 +87,14 @@ try {
   const names = registered.map((d) => d.name)
   log('tools registered = ' + registered.length)
   log('names = ' + names.join(','))
-  assert.equal(registered.length, 20, '20 browser tools registered')
-  const expected = ['browser_navigate', 'browser_screenshot', 'browser_click', 'browser_type', 'browser_evaluate', 'browser_extract', 'browser_task', 'browser_status', 'browser_snapshot', 'browser_back', 'browser_forward', 'browser_reload', 'browser_scroll', 'browser_press', 'browser_wait', 'browser_hover', 'browser_cookies', 'browser_console_messages', 'browser_network_requests', 'browser_pdf']
+  assert.equal(registered.length, 21, '21 browser tools registered')
+  const expected = ['browser_navigate', 'browser_screenshot', 'browser_click', 'browser_type', 'browser_evaluate', 'browser_extract', 'browser_task', 'browser_status', 'browser_snapshot', 'browser_back', 'browser_forward', 'browser_reload', 'browser_scroll', 'browser_press', 'browser_wait', 'browser_hover', 'browser_cookies', 'browser_console_messages', 'browser_network_requests', 'browser_pdf', 'browser_download']
   for (const n of expected) assert.ok(names.includes(n), 'tool ' + n + ' present')
 
   // ── Exercise the real browser path through the registered tools ────────
   if (process.env.DSH_TUI_SKIP_BROWSER) {
     log('DSH_TUI_SKIP_BROWSER set — skipping live browser check')
-    console.log('[container] dsh-tui-browser-use container check OK: 20 tools registered (browser skipped)')
+    console.log('[container] dsh-tui-browser-use container check OK: 21 tools registered (browser skipped)')
     process.exit(0)
   }
 
@@ -122,7 +122,7 @@ try {
   assert.equal(snapRes.ok, true, 'snapshot returns ok')
   assert.ok(Array.isArray(snapRes.value.nodes), 'snapshot returns a nodes array')
 
-  console.log('[container] dsh-tui-browser-use container check OK: 20 tools registered, browser live (version=' + statusRes.value.version + ')')
+  console.log('[container] dsh-tui-browser-use container check OK: 21 tools registered, browser live (version=' + statusRes.value.version + ')')
   // The browser we launched keeps the Node event loop alive; exit explicitly so
   // a CI runner sees the success immediately instead of hanging on Chromium.
   process.exit(0)

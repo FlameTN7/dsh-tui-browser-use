@@ -38,16 +38,16 @@ jobs:
           key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-playwright-
-      # R-11: set the launch binary env so the container-register / integration
-      # scripts pick a real Chromium even when Playwright's default channel
-      # resolution differs by runner.
+      # R-11: install Playwright Chromium so the integration scripts use a real
+      # browser. No container-specific executable env is set here — the scripts
+      # fall back to Playwright's bundled Chromium via the default channel.
+      # Real container regressions set DSH_TUI_BROWSER_EXECUTABLE=/opt/chromium-1148/...
+      # locally (see docs/handover-live-readiness.zh.md §10).
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium --with-deps
       - name: Build
         run: npm run build
       - name: Browser integration
-        env:
-          DSH_TUI_BROWSER_EXECUTABLE: /opt/chromium-1148/chrome-linux/chrome
         run: node --import tsx/esm scripts/browser-integration.ts
       - name: Container register check
-        env:
-          DSH_TUI_BROWSER_EXECUTABLE: /opt/chromium-1148/chrome-linux/chrome
         run: node scripts/container-register-check.mjs

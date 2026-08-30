@@ -332,10 +332,10 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
 
     {
       name: 'browser_screenshot',
-      description: 'Capture the current page and, when vision is available, read it with a vision model. Returns visual insight, a compact element summary, and (for the official DeepSeek file path) the file_id. When savePath is set, writes the captured screenshot (or first tile) to that absolute path.',
+      description: 'Capture the current page and, when vision is available, read it with a vision model. Returns visual insight and (for the official DeepSeek file path) the file_id. When savePath is set, writes the captured screenshot to the workspace — a single buffer to savePath verbatim, or tiled segments as stem-N.ext beside it (savedPath is the first written file).',
       parameters: objSchema({
         instruction: { type: 'string', description: 'Optional instruction for the vision model, e.g. "read all link text".' },
-        savePath: { type: 'string', description: 'Optional absolute path to write the screenshot to the workspace (only the first tile when the page is tiled).' },
+        savePath: { type: 'string', description: 'Optional absolute path to write the screenshot. A single capture goes verbatim to savePath; a tiled page writes stem-1.ext…stem-N.ext beside it and returns them in savedPaths.' },
       }),
       output: { schema: envelopeSchema(), render: renderUntrusted },
       timeoutMs: 60_000,
@@ -394,6 +394,10 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
             elementSummary: '',
             fileId,
             visionUsed: visionActive,
+            // Surface why vision was skipped on the savePath branch too (H-04),
+            // so the field is present whenever `visionUsed` is false, not only
+            // on the no-savePath short-circuit.
+            visionUnavailableReason: visionActive ? undefined : (deps.visionMode() === 'off' ? 'vision-off' : 'vision-unavailable'),
             tilesTotal: cap.segmentsTotal,
             tilesCaptured: cap.captured,
             tilesTruncated: cap.truncated,
