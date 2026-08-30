@@ -20,7 +20,7 @@
  * new config `session.mode=persistent|isolated` / `session.profile=<name>`
  * drives the managed paths when no env override is present.
  */
-import { chmodSync, mkdirSync, openSync, closeSync, unlinkSync, writeFileSync, renameSync, rmSync } from 'node:fs'
+import { chmodSync, mkdirSync, openSync, closeSync, unlinkSync, writeFileSync, renameSync, rmSync, readFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
@@ -278,7 +278,45 @@ export function acquireLock(lockPath: string): { held: true } | { held: false; r
     return { held: true }
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code
-    return { held: false, reason: code === 'EEXIST' ? 'locked' : 'error' }
+    if (code === 'EEXIST') {
+      // Stale-lock detection: if the recorded PID is no longer running, the
+      // lock is orphaned (e.g. the owner was killed with SIGKILL) — remove it
+      // and retry once. A valid live owner keeps the lock as-is.
+      if (tryReleaseStaleLock(lockPath)) {
+        return acquireLock(lockPath)
+      }
+      return { held: false, reason: 'locked' }
+    }
+    return { held: false, reason: 'error' }
+  }
+}
+
+/**
+ * True when the lock file exists but its recorded PID is not a live process.
+ * A malformed lock (no parseable PID) is also treated as stale. Never throws.
+ */
+function tryReleaseStaleLock(lockPath: string): boolean {
+  try {
+    const pidText = readFileSync(lockPath, 'utf8').trim()
+    const pid = Number.parseInt(pidText, 10)
+    if (!Number.isFinite(pid) || pid <= 0) {
+      unlinkSync(lockPath)
+      return true
+    }
+    try {
+      process.kill(pid, 0) // signal 0 = existence check only
+      return false // process alive → lock is valid
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code === 'ESRCH') { // no such process
+        unlinkSync(lockPath)
+        return true
+      }
+      // EPERM = exists but not ours → assume alive; anything else → keep.
+      return false
+    }
+  } catch {
+    return false // read/unlink failed — do not touch
   }
 }
 
