@@ -26,7 +26,8 @@
     "README.md",
     "README_EN.md",
     "LICENSE",
-    "docs/proposals"
+    "docs/proposals",
+    "scripts/postinstall.mjs"
   ],
   "engines": {
     "node": "^22.19 || >=24"
@@ -35,6 +36,7 @@
     "clean": "rm -rf lib",
     "compile": "npm run clean && tsc -p tsconfig.json",
     "build": "npm run compile",
+    "prepack": "npm run build",
     "check": "npm run build && npm run smoke && npm run verify:manifest && npm run verify:i18n && npm run router:check",
     "postinstall": "node scripts/postinstall.mjs",
     "smoke": "node --import tsx/esm scripts/smoke.ts",

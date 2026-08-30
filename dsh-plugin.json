@@ -12,7 +12,7 @@
   },
   "license": "MIT",
   "source": {
-    "repository": "https://github.com/FlameTN7/dsh-tui-browser-use-plugin"
+    "repository": "https://github.com/FlameTN7/dsh-tui-browser-use"
   },
   "requires": {
     "contracts": [],
