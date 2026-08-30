@@ -187,8 +187,8 @@ never as a directive (defends against prompt injection).
 npm install            # install dependencies (postinstall prints browser guidance)
 npm run build          # tsc → lib/types/
 npm run check          # CI gate: build+smoke+verify:manifest+verify:i18n+router:check
-npm run smoke          # headless smoke (entry + capability + preprocess + tool defs, 20 tools)
-npm run test:logic     # pure-logic tests: extract retry / prompt-injection fencing / settings-live / render contract / redact / usage accumulate / abort (no browser/key)
+npm run smoke          # headless smoke (entry + capability + preprocess + tool defs, 21 tools)
+npm run test:logic     # pure-logic tests: extract retry / prompt-injection fencing / settings-live / render contract / redact / usage accumulate / abort / file-interaction (no browser/key)
 npm run test:integration # live browser integration (needs DSH_TUI_BROWSER_EXECUTABLE)
 npm run test:tiling-defects # tiling 3-defect regression: wide split/truncation/control (needs DSH_TUI_BROWSER_EXECUTABLE)
 npm run verify:manifest # @dsh-std/manifest validates dsh-plugin.json

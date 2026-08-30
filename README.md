@@ -181,8 +181,8 @@ Playwright 截图
 npm install            # 安装依赖（postinstall 打印浏览器就绪指引）
 npm run build          # tsc → lib/types/
 npm run check          # CI 门禁：build+smoke+verify:manifest+verify:i18n+router:check
-npm run smoke          # 无头冒烟（入口 + 能力判定 + 截图预处理 + 工具定义，20 工具）
-npm run test:logic     # 纯逻辑测试：extract 重试 / 提示注入护栏 / settings-live / render 契约 / 脱敏 / usage 累计 / abort（无需浏览器/key）
+npm run smoke          # 无头冒烟（入口 + 能力判定 + 截图预处理 + 工具定义，21 工具）
+npm run test:logic     # 纯逻辑测试：extract 重试 / 提示注入护栏 / settings-live / render 契约 / 脱敏 / usage 累计 / abort / file-interaction（无需浏览器/key）
 npm run test:integration # 真实浏览器集成（需 DSH_TUI_BROWSER_EXECUTABLE）
 npm run test:tiling-defects # tiling 三缺陷回归：宽页分片/截断上报/控制页（需 DSH_TUI_BROWSER_EXECUTABLE）
 npm run verify:manifest # @dsh-std/manifest 校验 dsh-plugin.json
