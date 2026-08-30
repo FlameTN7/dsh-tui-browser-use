@@ -25,7 +25,7 @@ All tools live in the `browser_*` namespace and return a unified envelope
 | `browser_evaluate` | Run JS in the page | `expression` |
 | `browser_extract` | Extract structured data by a JSON Schema | `schema`, `instruction?` |
 | `browser_task` | Run a multi-step natural-language task | `instruction` |
-| `browser_snapshot` | Index interactive/semantic elements (role/name/bbox) to observe the page without a screenshot | `maxNodes?` |
+| `browser_snapshot` | Index interactive/semantic elements (role/name/bbox) to observe the page without a screenshot. Nodes carry a stable, cross-call `id`; `delta:true` returns `added/changed/removed/reindexed` since the last snapshot | `maxNodes?` / `delta?` |
 | `browser_back` / `browser_forward` / `browser_reload` | Go back / forward / reload | — |
 | `browser_scroll` | Scroll by a pixel delta | `x?` / `y?` |
 | `browser_press` | Press a keyboard key | `key` |
@@ -36,7 +36,7 @@ All tools live in the `browser_*` namespace and return a unified envelope
 | `browser_network_requests` | Capture network requests | `clear?` |
 | `browser_pdf` | Print the page to a PDF | `path?` / `format?` |
 | `browser_download` | Download a file from a URL to disk (uses session cookies/auth) | `url` / `savePath?` |
-| `browser_status` | Check availability + config | — |
+| `browser_status` | Check availability + config + the effective session profile (`value.session`: mode/profile/sanitized profileDir/degraded) | — |
 
 ## Common workflow
 
@@ -69,6 +69,26 @@ All tools live in the `browser_*` namespace and return a unified envelope
   neither exists, tools return `browser-error` with an install hint — never a
   silent crash.
 
+## Session / login state
+
+The plugin manages browser login state through a `session` config block (and the
+`DSH_TUI_BROWSER_USER_DATA_DIR` / `DSH_TUI_BROWSER_STORAGE_STATE` env vars).
+
+- **`session.mode: persistent`** keeps one fixed, named profile whose login
+  survives browser restarts. Useful for accounts that must stay signed in across
+  turns. It takes an atomic lock at startup; if the same named profile is already
+  locked by another session, the plugin auto-degrades to a fresh `isolated`
+  profile (`browser_status` reports `degraded:true`) instead of hanging.
+- **`session.mode: isolated`** (default) uses a brand-new ephemeral profile each
+  run and cleans it up on close — a clean login state every time.
+- **`session.profile`** names the profile directory (validated as one safe path
+  segment, 1-64 chars of `A-Za-z0-9._-`). Copy the whole `profiles/<name>/`
+  directory to another machine or path, point `session.profile` at it, and the
+  login state follows — the profile dir is packable/migratable.
+- The env vars take precedence over `session.mode` (external, unmanaged profile).
+- `browser_status`'s `value.session` reflects the sanitized runtime-effective
+  profile. Change `session.mode` by restarting the session (like `proxy`).
+
 ## Gotchas
 
 - `browser_extract` reads the page with the vision model and returns JSON that
@@ -88,9 +108,12 @@ All tools live in the `browser_*` namespace and return a unified envelope
 - `browser_cookies` masks cookie values as `***` by default and reads them
   only with `readValues:true`, so a page's auth state never leaks into the
   model context.
+- `browser_click` / `browser_type` / `browser_scroll` accept an optional
+  `delta:true` to return a short page-change delta (labeled untrusted); it is
+  off by default, so existing callers see no extra output.
 - TUI settings: the plugin's config is editable under `/settings` →
-  **Browser Automation (browser-use)**. It can also be set via
-  `cordis.patch.yml`.
+  **Browser Automation (browser-use)**, including `session.mode` /
+  `session.profile`. It can also be set via `cordis.patch.yml`.
 
 ## See also
 
