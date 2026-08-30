@@ -363,3 +363,8 @@ export class PlaywrightDriver implements BrowserDriver {
     return this.requireContext().request.get(url, { timeout: timeoutMs })
   }
 }
+
+/** Construct the default Playwright-backed browser driver. */
+export function createPlaywrightDriver(): BrowserDriver {
+  return new PlaywrightDriver()
+}

@@ -20,6 +20,18 @@
       "types": "./lib/types/index.d.ts",
       "default": "./lib/types/index.js"
     },
+    "./driver": {
+      "types": "./lib/types/driver/browser-driver.d.ts",
+      "default": "./lib/types/driver/browser-driver.js"
+    },
+    "./vision": {
+      "types": "./lib/types/vision/vision-adapter.d.ts",
+      "default": "./lib/types/vision/vision-adapter.js"
+    },
+    "./types": {
+      "types": "./lib/types/types.d.ts",
+      "default": "./lib/types/types.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [

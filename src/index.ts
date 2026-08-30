@@ -413,5 +413,19 @@ export function apply(ctx: Context, config: Config): void {
 
 export default { name, inject, Config, apply }
 
+// ── Public programming surface (B1) ──────────────────────────────────────
+// Third parties / the harness can drive the plugin programmatically or extend
+// it by injecting a driver/adapter. The modules each re-export their own types
+// and helpers; this entry re-exports the highest-level seams so an importer
+// needs just one `import ... from 'dsh-tui-browser-use'`.
+
+// Runtime seams.
+export { BrowserSession, BrowserToolError } from './browser.js'
+export { buildToolDefinitions, registerTools } from './tools.js'
+export { createPlaywrightDriver } from './driver/playwright-driver.js'
+export { createVisionAdapter } from './vision/vision-adapter.js'
+export { effectiveViewport, detectCapability } from './capabilities.js'
+
 // Re-exports so tool consumers can type against the contract.
 export type { BrowserUseConfig, ProviderOverride, ImageTransfer, VisionMode, ScreenshotFormat, TilingMode }
+export type { ResultEnvelope, Usage, ErrorCode } from './types.js'

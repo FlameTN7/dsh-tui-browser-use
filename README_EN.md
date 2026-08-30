@@ -117,6 +117,27 @@ npm run test:container  # stub harness loads the artifact + real browser boot (2
 npm run test:integration # live browser integration (navigate/click/type/screenshot/tiling/snapshot)
 ```
 
+## Programmatic use / extension points
+
+The plugin exposes a small programming surface so a host or third party can
+drive the browser or swap a backend without touching the tool registries.
+
+- **Browser backend**: `BrowserSession` is constructed with a `BrowserDriver`
+  (default `PlaywrightDriver`). Inject your own driver (e.g. a stub or a future
+  headless-shell backend) to replace the Playwright implementation. The driver
+  contract lives at `dsh-tui-browser-use/driver`.
+- **Vision transport**: `createVisionAdapter(env, runtimeEnv)` returns the
+  adapter for the resolved image-transfer mode (`file` → DeepSeek Files-API;
+  `base64`/`url` → OpenAI-compatible inline). Swappable at
+  `dsh-tui-browser-use/vision`.
+- **Tool registration**: `buildToolDefinitions(deps)` / `registerTools(ctx, deps)`
+  build and register the 21 `browser_*` tools; the registries accept an injected
+  session + vision resolver, so a host can wrap or extend them.
+
+Subpath exports: `dsh-tui-browser-use/driver`, `dsh-tui-browser-use/vision`,
+`dsh-tui-browser-use/types`. The tool count and the unified result envelope
+(`{ ok, value|error, usage? }`) are part of the contract and must not change.
+
 ## Known limitations
 
 This project is a pure Vibe Coding product: it has only been initially implemented and verified in a headless Linux environment. Feedback — including hard scrutiny — is welcome.
