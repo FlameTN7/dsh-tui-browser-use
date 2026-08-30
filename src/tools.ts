@@ -344,9 +344,9 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         const p = (args ?? {}) as ScreenshotParams
         try {
           // Resolve vision BEFORE capturing: when vision is off/unavailable we
-          // short-circuit to a DOM summary instead of screenshotting+tiling a
-          // page the model cannot read (P1-08). This also avoids the redundant
-          // elementSummary path that duplicated browser_snapshot.
+          // short-circuit WITHOUT screenshotting/tiling a page the model cannot
+          // read (P1-08). DOM observation is unified under browser_snapshot, so
+          // this path returns no elementSummary either.
           const env = await deps.resolveVisionEnv()
           const visionActive = deps.visionMode() !== 'off' && env !== null
           const wantsSave = Boolean(p.savePath)
