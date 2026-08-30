@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import { BrowserSession } from './browser.js'
-import { registerTools } from './tools.js'
+import { registerTools } from './tools/registry.js'
 import { registerSettingsSection } from './settings-section.js'
 import { resolveProvider, resolveRoute } from './provider-router.js'
 import { detectCapability } from './capabilities.js'
@@ -421,7 +421,8 @@ export default { name, inject, Config, apply }
 
 // Runtime seams.
 export { BrowserSession, BrowserToolError } from './browser.js'
-export { buildToolDefinitions, registerTools } from './tools.js'
+export { buildToolDefinitions } from './tools.js'
+export { registerTools } from './tools/registry.js'
 export { createPlaywrightDriver } from './driver/playwright-driver.js'
 export { createVisionAdapter } from './vision/vision-adapter.js'
 export { effectiveViewport, detectCapability } from './capabilities.js'

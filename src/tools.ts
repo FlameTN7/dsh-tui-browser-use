@@ -832,26 +832,9 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
   ] satisfies ToolDefinition[]
 }
 
-/**
- * Register all tools on a structurally-shaped harness `ctx.tools` service.
- * Returns the combined disposer (unregisters every tool).
- */
-export function registerTools(ctx: { get(name: string, optional?: boolean): unknown }, deps: ToolDeps): (() => void) | null {
-  const tools = ctx.get('tools', false) as { register?(d: ToolDefinition): () => void } | undefined
-  if (!tools?.register) return null
-  const defs = buildToolDefinitions(deps)
-  const disposers = defs.map((d) => {
-    // Serialize every tool call onto the single shared browser page (P1 #9):
-    // the session locks itself across calls, so concurrent tool dispatch never
-    // interleaves Playwright operations. Read-only tools (status) still queue —
-    // the harness's `isConcurrencySafe` classifier may launch them in parallel,
-    // but they now drain serially instead of racing a navigate/click/type.
-    const execute = (args: unknown, exec: unknown): Promise<unknown> =>
-      deps.session.run(() => d.execute(args, exec))
-    return tools.register!({ ...d, execute })
-  })
-  return () => disposers.forEach((d) => d())
-}
+// Tool registration lives in `src/tools/registry.ts` (Map<name, disposer> +
+// `registerExtraTool` seam). `buildToolDefinitions` stays here as the pure
+// definition builder; `registerTools` wires those definitions onto the harness.
 
 // Re-export the error type for downstream modules.
 export type { BrowserToolError } from './browser.js'
