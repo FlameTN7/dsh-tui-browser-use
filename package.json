@@ -48,7 +48,7 @@
     "test:vision-router": "node scripts/vision-router-check.mjs",
     "test:vision-textonly": "node scripts/vision-textonly-check.mjs",
     "test:vision-tiling": "node scripts/vision-tiling-check.mjs",
-    "test:vision-mimo": "node scripts/vision-mimo-check.mjs",
+    "test:vision-openai-compat": "node scripts/vision-openai-compat-check.mjs",
     "test:dynamic": "node scripts/dynamic-page-check.mjs",
     "test:iframe": "node scripts/iframe-check.mjs",
     "test:engine": "node scripts/browser-engine-check.mjs",

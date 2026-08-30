@@ -20,8 +20,6 @@ import type { ImageTransfer, ProviderCapability, ProviderOverride } from './type
 const BUILTIN: Record<string, { supportsVision: boolean; imageTransfer: ImageTransfer; detail: 'high' | 'low' }> = {
   // Official DeepSeek with a vision model: images ride the Files API.
   deepseek: { supportsVision: true, imageTransfer: 'file', detail: 'high' },
-  // Xiaomi MiMo is a multimodal OpenAI-compatible model; images inline as base64.
-  xiaomi: { supportsVision: true, imageTransfer: 'base64', detail: 'high' },
   // OpenAI-compatible endpoints commonly accept base64 image_url.
   openai: { supportsVision: true, imageTransfer: 'base64', detail: 'high' },
   anthropic: { supportsVision: true, imageTransfer: 'base64', detail: 'high' },
@@ -30,10 +28,10 @@ const BUILTIN: Record<string, { supportsVision: boolean; imageTransfer: ImageTra
 
 /**
  * Multi-modal model ids that do NOT carry a `vision|vl|visual` name hint but
- * are in fact vision-capable (e.g. Xiaomi MiMo). Kept explicit so the
- * name-based fallback below doesn't misclassify them as text-only.
+ * are in fact vision-capable. Kept explicit so the name-based fallback below
+ * doesn't misclassify them as text-only.
  */
-const VISION_MODEL_IDS = new Set(['mimo-v2.5', 'mimo-v2', 'deepseek-vl'])
+const VISION_MODEL_IDS = new Set(['deepseek-vl'])
 
 /**
  * Whether a provider route + model id actually accepts image input. Used by

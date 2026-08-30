@@ -286,7 +286,7 @@ export function apply(ctx: Context, config: Config): void {
 
     // Transfer mode: explicit `deepseek-file-api` wins, then env override, then
     // the user's provider override, then the route table (deepseek=file,
-    // xiaomi=base64, unknown=base64).
+    // unknown OpenAI-compatible=base64).
     let imageTransfer: ImageTransfer
     if (forceFileApi) {
       imageTransfer = 'file'

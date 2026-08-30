@@ -2,11 +2,10 @@
  * dsh-tui-browser-use — provider route resolution.
  *
  * The vision path must route to the provider the harness is using, not a
- * hard-coded deepseek. This module owns that routing: it carries a small
- * built-in route table for the providers this plugin actually reaches
- * (official DeepSeek, Xiaomi MiMo, scnet), maps each to its endpoint, its
- * credential environment name, its default vision model, and its transfer
- * capability, and resolves an override (env var / config) on top.
+ * hard-coded deepseek. This module owns that routing: it carries the built-in
+ * route for the official DeepSeek (endpoint, credential environment name,
+ * default vision model, Files-API transfer), and resolves env-var overrides on
+ * top so an OpenAI-compatible gateway can be pointed at without editing code.
  *
  * The route table lives here rather than being read from a harness settings
  * namespace because the llm-pi-ai namespace is not registered on the settings
@@ -37,7 +36,8 @@ export interface ProviderRouteInfo {
   api?: string
 }
 
-/** Built-in route table for providers this plugin reaches. */
+/** Built-in route table: official DeepSeek only. Other endpoints are reached
+ * through the env overrides below as generic OpenAI-compatible routes. */
 const ROUTES: Record<string, ProviderRouteInfo> = {
   deepseek: {
     provider: 'deepseek',
@@ -46,22 +46,14 @@ const ROUTES: Record<string, ProviderRouteInfo> = {
     defaultModel: 'deepseek-v4-flash-vision-exp',
     api: 'deepseek',
   },
-  xiaomi: {
-    provider: 'xiaomi',
-    baseURL: 'https://api.xiaomimimo.com/v1',
-    apiKeyEnv: 'XIAOMI_API_KEY',
-    defaultModel: 'mimo-v2.5',
-    api: 'openai-completions',
-  },
 }
 
-/** The canonical provider ids this plugin knows. */
+/** The canonical provider ids this plugin ships built-in. */
 export const KNOWN_PROVIDERS = Object.keys(ROUTES)
 
 /** Known provider → transfer capability (mirrors capabilities.ts BUILTIN). */
 const TRANSFER: Record<string, ImageTransfer> = {
   deepseek: 'file',
-  xiaomi: 'base64',
 }
 
 /** Effective override env var names (values should never be logged). */
@@ -97,16 +89,18 @@ export function resolveProvider(forceFileApi: boolean): string {
 /**
  * Resolve the full route info for a provider, applying env overrides for the
  * base URL and model (so a user can point at a gateway without editing code).
- * Unknown providers get a permissive OpenAI-compatible route (base64 inline),
- * matching the capabilities module's model-name fallback.
+ * Unknown providers get a permissive OpenAI-compatible route (base64 inline)
+ * with a generic `OPENAI_API_KEY` credential env; they must also set
+ * `DSH_TUI_BROWSER_MODEL` — an unknown route never falls back to a DeepSeek
+ * model or key, because that would send the wrong credentials/model to a
+ * foreign endpoint.
  */
 export function resolveRoute(provider: string): ProviderRouteInfo {
   const known = isKnownProvider(provider) ? ROUTES[provider] : undefined
   const baseURL = envOf(ROUTE_ENV.baseUrl) ?? known?.baseURL ?? 'https://api.openai.com/v1'
-  const model = envOf(ROUTE_ENV.model) ?? known?.defaultModel ?? 'deepseek-v4-flash-vision-exp'
-  const apiKeyEnv = known?.apiKeyEnv ?? 'DEEPSEEK_API_KEY'
-  const api = known?.api ?? (known ? undefined : 'openai-completions')
-  if (!known) return { provider, baseURL, apiKeyEnv, defaultModel: model, api }
+  const model = envOf(ROUTE_ENV.model) ?? known?.defaultModel ?? ''
+  const apiKeyEnv = known?.apiKeyEnv ?? 'OPENAI_API_KEY'
+  const api = known?.api ?? 'openai-completions'
   return { provider, baseURL, apiKeyEnv, defaultModel: model, api }
 }
 

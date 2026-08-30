@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * dsh-tui-browser-use — text-only model degrades vision to DOM fallback.
+ * dsh-tui-browser-use — text-only model degrades vision (no screenshot sent).
  *
  * Sets `DSH_TUI_BROWSER_MODEL=deepseek-v4-flash` (a non-multimodal model), so
  * the plugin's `resolveVisionEnv` must return null and `browser_screenshot`
- * fall back to the DOM elementSummary instead of sending a screenshot to a
- * model that cannot read it. Confirms the scnet-removal / text-only routing
- * decision end to end.
+ * short-circuits to `visionUsed:false` + `visionUnavailableReason` without
+ * sending a screenshot to a model that cannot read it. DOM observation stays
+ * with `browser_snapshot` (R-05).
  *
  * Usage: node scripts/vision-textonly-check.mjs
  */
@@ -25,7 +25,6 @@ async function main() {
   // Route to the official DeepSeek provider but with the TEXT-ONLY model.
   process.env.DSH_TUI_BROWSER_PROVIDER = 'deepseek'
   process.env.DSH_TUI_BROWSER_MODEL = 'deepseek-v4-flash'
-  process.env.DSH_TUI_BROWSER_EXECUTABLE = process.env.DSH_TUI_BROWSER_EXECUTABLE ?? '/opt/chromium-1148/chrome-linux/chrome'
 
   const mod = await import(entry)
   const plugin = mod.default ?? mod
@@ -66,12 +65,13 @@ async function main() {
   log('screenshot result: ' + JSON.stringify(res))
   assert.equal(res.ok, true, 'screenshot ok')
 
-  // Vision must be OFF (visualInsight empty) and the DOM summary populated.
+  // Vision must be OFF and no DOM summary duplicated (DOM lives in browser_snapshot).
   assert.equal(res.value.visualInsight, '', 'text-only model → no visual insight')
-  assert.ok(res.value.elementSummary.length > 0, 'DOM elementSummary populated')
-  assert.match(res.value.elementSummary, /链接B|按钮C|纯文本标题/, 'elementSummary sees DOM content')
+  assert.equal(res.value.elementSummary, '', 'R-05: no DOM elementSummary')
+  assert.equal(res.value.visionUsed, false, 'visionUsed false')
+  assert.equal(res.value.visionUnavailableReason, 'vision-unavailable', 'reason reported')
 
-  console.log('[vision-textonly] OK (deepseek-v4-flash → DOM fallback): ' + res.value.elementSummary.replace(/\n/g, ' | ').slice(0, 80))
+  console.log('[vision-textonly] OK (deepseek-v4-flash → visionUnavailableReason=' + res.value.visionUnavailableReason + ')')
   process.exit(0)
 }
 

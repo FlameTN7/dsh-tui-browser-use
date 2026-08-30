@@ -34,7 +34,7 @@ const env = {
   apiKey: 'test-key',
   model: 'vision-model',
   imageTransfer: 'base64',
-  provider: 'xiaomi',
+  provider: 'openai',
   currentModel: 'vision-model',
 }
 

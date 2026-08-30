@@ -153,7 +153,7 @@ async function reusableFileId(env: VisionEnv, image: PreparedImage, baseUrl: str
   return fileId
 }
 
-// ── Retry (scnet is prone to 429; gateways intermittently return 5xx) ─────
+// ── Retry (gateways intermittently return 429/5xx) ─────────────────────────
 
 const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504])
 const DEFAULT_MAX_RETRIES = 4

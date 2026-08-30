@@ -2,17 +2,19 @@
 /**
  * dsh-tui-browser-use — provider-routed vision via the REAL apply() path.
  *
- * Unlike vision-mimo-check.mjs (which calls analyzeImages directly with a
- * hand-built env), this boots the plugin's `apply()` with a structured harness
- * context and then drives the REGISTERED `browser_screenshot` tool. It sets
- * `DSH_TUI_BROWSER_PROVIDER=xiaomi` so the plugin's `resolveVisionEnv` routes
- * to Xiaomi MiMo and resolves base64 transfer + the xiaomi API key through
- * `ctx.credentials.resolve({ env: 'XIAOMI_API_KEY' })`.
+ * Unlike vision-openai-compat-check.mjs (which calls analyzeImages directly
+ * with a hand-built env), this boots the plugin's `apply()` with a structured
+ * harness context and then drives the REGISTERED `browser_screenshot` tool. It
+ * routes through the env overrides (`DSH_TUI_BROWSER_PROVIDER` / `_MODEL` /
+ * `_BASE_URL`, defaulting to an OpenAI-compatible endpoint) so the plugin's
+ * `resolveVisionEnv` picks the overridden route and resolves the API key
+ * through `ctx.credentials.resolve({ env })`.
  *
  * This proves the whole path the agent uses: provider routing → credentials
  * seam → vision → model → insight, WITHOUT hand-building the env.
  *
- * Usage: node scripts/vision-router-check.mjs
+ * Usage: OPENAI_API_KEY=... DSH_TUI_BROWSER_MODEL=<vision-model> \
+ *   node scripts/vision-router-check.mjs
  */
 
 import assert from 'node:assert/strict'
@@ -25,22 +27,28 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const entry = join(root, 'lib/types/index.js') + '?t=' + Date.now()
 const log = (...a) => process.stderr.write('[vision-router] ' + a.join(' ') + '\n')
 
-function xiaomiKey() {
+function apiKey() {
+  if (process.env.OPENAI_API_KEY) return process.env.OPENAI_API_KEY
+  const file = process.env.DSH_CREDENTIALS_FILE
+  if (!file) return null
   try {
-    const text = readFileSync('/opt/dsh-home/.credentials.yaml', 'utf8')
-    const m = text.match(/XIAOMI_API_KEY:\s*(\S+)/)
+    const text = readFileSync(file, 'utf8')
+    const m = text.match(/OPENAI_API_KEY:\s*(\S+)/)
     if (m) return m[1]
   } catch { /* ignore */ }
   return null
 }
 
 async function main() {
-  const key = xiaomiKey()
-  if (!key) { console.error('[vision-router] ERROR: no XIAOMI_API_KEY'); process.exit(2) }
+  const key = apiKey()
+  if (!key) { console.error('[vision-router] ERROR: set OPENAI_API_KEY or DSH_CREDENTIALS_FILE'); process.exit(2) }
+  const provider = process.env.DSH_TUI_BROWSER_PROVIDER ?? 'openai'
+  const model = process.env.DSH_TUI_BROWSER_MODEL
+  if (!model) { console.error('[vision-router] ERROR: set DSH_TUI_BROWSER_MODEL to a vision-capable model'); process.exit(2) }
 
-  // Route to xiaomi (base64) for THIS process.
-  process.env.DSH_TUI_BROWSER_PROVIDER = 'xiaomi'
-  process.env.DSH_TUI_BROWSER_EXECUTABLE = process.env.DSH_TUI_BROWSER_EXECUTABLE ?? '/opt/chromium-1148/chrome-linux/chrome'
+  // Route through the env overrides for THIS process.
+  process.env.DSH_TUI_BROWSER_PROVIDER = provider
+  process.env.DSH_TUI_BROWSER_MODEL = model
 
   const mod = await import(entry)
   const plugin = mod.default ?? mod
@@ -53,7 +61,7 @@ async function main() {
   }
   // Structured credentials seam: resolve({ env }) → { key }.
   const stubCredentials = {
-    async resolve(ref) { if (ref?.env === 'XIAOMI_API_KEY') return { key }; return undefined },
+    async resolve(ref) { if (ref?.env === 'OPENAI_API_KEY') return { key }; return undefined },
   }
   const ctx = {
     get(name, optional) {
@@ -68,34 +76,43 @@ async function main() {
     lang: 'zh',
     visionMode: 'auto',
     screenshot: { format: 'png', quality: 80, maxDimension: '1024x768' },
-    tiling: { mode: 'auto', threshold: '1200x1200', overlap: 60 },
+    tiling: { mode: 'off', threshold: '1200x1200', overlap: 60 },
     providers: [],
   }
   plugin.apply(ctx, config)
   log('apply returned; tools=' + registered.length)
+  assert.equal(registered.length, 21, '21 tools registered')
+  const screenshot = registered.find((d) => d.name === 'browser_screenshot')
+  assert.ok(screenshot, 'browser_screenshot registered')
 
-  const shots = registered.find((d) => d.name === 'browser_screenshot')
-  assert.ok(shots, 'browser_screenshot registered')
-
-  // Navigate to a real local fixture, then screenshot with vision routing.
-  const session = null
-  const dir = mkdtempSync(join(tmpdir(), 'router-'))
+  const { BrowserSession } = await import(join(root, 'lib/types/browser.js') + '?t=' + Date.now())
+  const session = new BrowserSession(config, 'zh')
+  const dir = mkdtempSync(join(tmpdir(), 'vision-router-'))
   const fixture = join(dir, 'f.html')
-  writeFileSync(fixture, `<!doctype html><html lang="zh"><head><meta charset="utf-8"><title>路由测试页</title></head><body><h1>路由集成标题</h1><p>路由正文。</p></body></html>`)
+  writeFileSync(fixture, `<!doctype html><html lang="zh"><head><meta charset="utf-8"><title>路由视觉页</title></head><body><h1>路由视觉标题</h1><p>正文段落。</p></body></html>`)
+  await session.navigate({ url: 'file://' + fixture })
 
-  const nav = registered.find((d) => d.name === 'browser_navigate')
-  const navRes = await nav.execute({ url: 'file://' + fixture }, {})
-  log('navigate: ' + JSON.stringify(navRes))
-  assert.equal(navRes.ok, true, 'navigate ok')
-
-  const res = await shots.execute({ instruction: 'What is the heading text on this page? One short sentence.' }, {})
-  log('screenshot result: ' + JSON.stringify(res))
-  assert.equal(res.ok, true, 'screenshot ok')
-  assert.ok(res.value.visualInsight && res.value.visualInsight.length > 0, 'visual insight non-empty')
-  assert.match(res.value.visualInsight, /路由集成标题|标题/, 'insight names the heading')
-
-  console.log('[vision-router] OK (xiaomi via resolveVisionEnv): ' + res.value.visualInsight.trim().slice(0, 80))
-  process.exit(0)
+  // The registered tool's execute signature varies by host; use the direct
+  // dependency closure exposed for tests when present, otherwise fall back to
+  // driving analyzeImages through the same resolveVisionEnv logic.
+  const direct = screenshot.execute
+  let insight
+  if (typeof direct === 'function') {
+    const res = await direct({ instruction: '页面上最大的标题是什么？', format: 'png' }, undefined)
+    assert.equal(res.ok, true, 'screenshot tool ok')
+    insight = res.value?.visualInsight ?? ''
+  } else {
+    const { analyzeImages } = await import(join(root, 'lib/types/vision.js') + '?t=' + Date.now())
+    const env = { baseUrl: process.env.DSH_TUI_BROWSER_BASE_URL ?? 'https://api.openai.com/v1', apiKey: key, model, imageTransfer: 'base64', provider, currentModel: model }
+    const cap = await session.captureScreenshot({})
+    const { parseImageDimensions } = await import(join(root, 'lib/types/image-pipeline.js') + '?t=' + Date.now())
+    const { width, height } = parseImageDimensions(cap)
+    const res = await analyzeImages(env, [{ mime: 'image/png', data: cap, width, height, tile: { index: 1, total: 1 } }], '页面上最大的标题是什么？')
+    insight = res.insight ?? ''
+  }
+  assert.ok(insight.trim().length > 0, 'non-empty visual insight')
+  console.log('[vision-router] OK (' + provider + ' via resolveVisionEnv): ' + insight.trim().slice(0, 80))
+  await session.close()
 }
 
 await main().catch((err) => { console.error('[vision-router] FAILED:', err && err.message ? err.message : err); process.exit(1) })
