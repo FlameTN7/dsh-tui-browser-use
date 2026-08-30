@@ -117,12 +117,12 @@ export const dict: I18nDict = {
     en: 'persistent keeps one fixed, named login-state profile (login survives restarts); isolated uses a fresh temp profile each run and cleans it up. Leave empty for the legacy behaviour (DSH_TUI_BROWSER_USER_DATA_DIR / _STORAGE_STATE take priority).',
   },
   'settings.session.profile.label': {
-    zh: '档案名',
-    en: 'Profile name',
+    zh: '登录存档名',
+    en: 'Login profile name',
   },
   'settings.session.profile.description': {
-    zh: '档案目录名（persistent 模式）。需为单段安全字符（字母数字._-，1-64），否则回退 default。',
-    en: 'Profile directory name (persistent mode). Must be one safe segment (A-Za-z0-9._-, 1-64); otherwise falls back to default.',
+    zh: 'persistent 模式下保存登录态的目录名。一般用默认 default 即可；仅在需要多套互不影响的登录态（如工作号/个人号分开）时才需改名。',
+    en: 'Directory name for saving login state in persistent mode. The default is usually fine; change it only when you need separate login states (e.g. work/personal).',
   },
   'tiling.truncated.note': {
     zh: '页面在第 {{captured}}/{{total}} 段后截断，还有 {{dropped}} 段未被采集，可见内容只到约 {{heightPx}}px 处，其下缺失。',
