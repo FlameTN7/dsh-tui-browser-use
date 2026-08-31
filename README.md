@@ -10,36 +10,35 @@
 
 - **21 个工具**：浏览、交互、观察、结构化提取、自然语言多步任务、文件下载等。
 - **视觉理解**：DeepSeek Files API（官方）或 OpenAI 兼容 base64 两种传输；
-长页自动滚屏分段、宽页分片、截断上报（超级拼装是针对DeepSeek官方识图后端严格压缩适配的，采取了以token换精度的做法）。
+- **超级拼装**: 针对DeepSeek官方识图后端的严格压缩进行适配,长页或宽页自动滚屏分段、分片、截断上传,确保识图的精度。
 - **会话能力**：会话档案与登录态管理（`session.mode` 持久化 / isolated 独立、锁文件防并发、冲突自动降级为独立临时档案、整目录可打包迁移），弹窗策略、串行互斥、导航/动作/收敛三类超时。
 - **文件交互**：`browser_screenshot.savePath` 截图落盘、`browser_download` 带会话 cookie 下载文件。
-- **安全默认**：视觉提示注入防护（`<task>` 定界，截图视为不可信内容）、URL/敏感 query/cookie 脱敏、无沙箱参数按需门控。
-- **三引擎**：chromium（默认）/ firefox / webkit，配置可进 dsh-tui `/settings` 面板修改。
+- **安全策略**：视觉提示注入防护（`<task>` 定界，截图视为不可信内容）、URL/敏感 query/cookie 脱敏、无沙箱参数按需门控。
+- **浏览器引擎支持**：chromium（默认内嵌,可跨平台）/ firefox / webkit，配置可进 dsh-tui `/settings` 面板修改。
 
 ## 架构
 
 ```
-┌────────────────────────────────────────────────────────┐
-│        dsh --profile dsh-tui (Cordis 组合)              │
-│                                                          │
-│  dsh-tui-browser-use (本插件)                            │
-│    ├── src/index.ts            插件入口 + 配置/公共导出    │
-│    ├── src/tools/registry.ts   注册 browser_* 工具（逐工具注销）│
-│    ├── src/browser.ts          Playwright 浏览器会话管理   │
-│    │     └─ driver/            BrowserDriver + PlaywrightDriver │
-│    ├── src/vision/             VisionAdapter 双实现        │
-│    │     ├─ deepseek-file-adapter (Files API 原生)       │
-│    │     └─ openai-compat-adapter (base64 内联)          │
-│    ├── src/session-profiles.ts 会话档案/锁/存储态原子写     │
-│    ├── src/runtime-env.ts      集中注入 DSH_TUI_* 环境变量 │
-│    ├── src/capabilities.ts     provider 能力判定          │
-│    ├── src/image-pipeline.ts   截图捕获期压缩/尺寸校验/切分 │
-│    ├── src/i18n.ts             双语 UI 字典               │
-│    └── src/settings-section.ts 注册 /settings 设置区块     │
-└────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│        dsh --profile dsh-tui (Cordis 组合)              
+│                                                          
+│  dsh-tui-browser-use (本插件)                            
+│    ├── src/index.ts            插件入口 + 配置/公共导出    
+│    ├── src/tools/registry.ts   注册 browser_* 工具（逐工具注销）
+│    ├── src/browser.ts          Playwright 浏览器会话管理   
+│    │     └─ driver/            BrowserDriver + PlaywrightDriver 
+│    ├── src/vision/             VisionAdapter 双实现        
+│    │     ├─ deepseek-file-adapter (Files API 原生)       
+│    │     └─ openai-compat-adapter (base64 内联)          
+│    ├── src/session-profiles.ts 会话档案/锁/存储态原子写     
+│    ├── src/runtime-env.ts      集中注入 DSH_TUI_* 环境变量 
+│    ├── src/capabilities.ts     provider 能力判定          
+│    ├── src/image-pipeline.ts   截图捕获期压缩/尺寸校验/切分 
+│    ├── src/i18n.ts             双语 UI 字典               
+│    └── src/settings-section.ts 注册 /settings 设置区块     
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-长页切分由 `BrowserSession.captureSegments()` 按 `视口高 − overlap` **滚屏分段**截多张原生分辨率视口图，宽页再按 `视口宽 − overlap` 分列；超过 `tiling.maxTiles` 时结果透出 `tilesTruncated` 等元数据。
 
 ## 工具一览
 
@@ -78,7 +77,7 @@ npx playwright install chromium --with-deps   # Linux；Windows/macOS 去掉 --w
 
 ### 会话档案模式（可选）
 
-`session` 配置块管理浏览器登录态档案（Phase 3，竞品 B5/B6）：
+`session` 配置块管理浏览器登录态档案：
 
 ```yaml
 config:
@@ -90,29 +89,12 @@ config:
 
 - 目录布局：`<档案根>/profiles/<name>/user-data`（含 cookies/登录态）、`<档案根>/states/<name>.storage-state.json`（原子写、0644→0600）、`<档案根>/ephemeral/<run-id>/`（isolated 临时档案，关闭即清理）。
 - 档案根为跨平台缓存目录：Linux `$XDG_CACHE_HOME`（默认 `~/.cache`）→ macOS `~/Library/Caches` → Windows `%LOCALAPPDATA%`，下挂 `dsh-tui-browser-use`。
-- 并发安全：`persistent` 启动时取 `O_EXCL` 原子锁；若同名档案被另一会话占用，插件自动降级为新的 `isolated` 临时档案（`browser_status` 报 `degraded:true`），绝不挂起。
 - 整目录可打包迁移：把 `profiles/<name>/` 复制到另一台机器/路径，将 `session.profile` 指向它，登录态即随档案迁移。
-- `browser_status` 的 `value.session` 回显运行期真实生效的脱敏档案信息；`config.session` 仅当配置了 `session` 块时出现。`session.mode` 改动需重启会话生效。
 
-### 常用环境变量
-
-部分变量注册到TUI的Settings界面下可供快速调整
-
-| 变量 | 说明 |
-|---|---|
-| `DSH_TUI_BROWSER_ENGINE` | 浏览器引擎：`chromium`（默认）/ `firefox` / `webkit` |
-| `DSH_TUI_BROWSER_EXECUTABLE` | 指向已有 Chromium 二进制 |
-| `DSH_TUI_BROWSER_PROVIDER` / `_MODEL` / `_BASE_URL` | 覆盖视觉 provider / 模型 / 端点 |
-| `DEEPSEEK_BASE_URL` | DeepSeek 官方端点覆盖（仅对 DeepSeek 路由生效，不会影响其他 provider） |
-| `DSH_TUI_BROWSER_PROXY` | 浏览器 HTTP 代理；`DSH_TUI_BROWSER_PROXY_BYPASS` 覆盖回环绕过列表 |
-| `DSH_TUI_BROWSER_USER_DATA_DIR` / `_STORAGE_STATE` | 持久化登录态 / 导出导入 storageState 快照（快照损坏时自动回退全新会话，不阻断启动）。设置 `session.mode` 后优先级低于该 env（env 优先，独立于插件管理档案） |
-| `DSH_TUI_BROWSER_DIALOG` | 弹窗策略：`dismiss`（默认）/ `accept` / `ignore` |
-| `DSH_TUI_BROWSER_TIMEOUT_NAVIGATION` / `_ACTION` / `_SETTLE` | 超时 ms（默认 45000 / 12000 / 6000；0 或负数回退默认，不会无限等待） |
-| `DSH_TUI_BROWSER_MAX_TILES` | 滚屏分段最大段数（默认 24；0 或负数回退默认） |
 
 ### 设置面板
 
-`/settings` 中 browser-use 区块（12 个字段）可改：`visionMode`、`viewport.width/height`、`screenshot.format/quality`、`tiling.mode/threshold/overlap/maxTiles`、`session.mode/profile`、`proxy`。`lang` 与 `providers[]` 暂无 UI，走 `cordis.patch.yml` / 环境变量配置。会话模式（persistent/isolated）改动需重启会话生效（与 proxy 一致）。
+本插件于dsh-tui注册命名空间,可于dsh-tui的/settings看见常用设置,部分设置需要会话重启后生效
 
 ## 视觉管线（简述）
 
@@ -124,10 +106,6 @@ Playwright 截图
   → OpenAI 兼容端点 → base64 内联
   → 无视觉模型 → 短路（visionUsed:false + visionUnavailableReason）
 ```
-
-- **Files API**：使用DeepSeek官方视觉模型时，截图上传一次可多次引用，请求体不随 base64 膨胀且更易于命中缓存；文件默认 24h 过期（`DSH_TUI_BROWSER_FILE_EXPIRES_SECONDS` 可调），同一截图在**文件过期前**按内容复用 file_id（缓存会在过期前约 10s 失效并重新上传）。
-- **可靠性**：视觉请求 429/5xx 指数退避重试；`browser_extract` schema 校验失败重试 ≤2 次并附 violation 清单。
-- **提示注入防护**：视觉指令用 `<task>…</task>` 定界，system 消息声明截图是不可信页面内容，页内指令一律按数据处理。
 
 ## 构建与验证
 
@@ -146,13 +124,13 @@ npm run test:storage-state # storageState 损坏回退 + persistent 导入（真
 
 - **浏览器后端**：`BrowserSession` 以一个 `BrowserDriver`（默认 `PlaywrightDriver`）构造。注入自己的 driver（如 stub 或将来的 headless-shell 后端）即可替换 Playwright 实现。driver 契约见 `dsh-tui-browser-use/driver`。
 - **视觉传输**：`createVisionAdapter(env, runtimeEnv)` 返回解析到的图像传输模式对应的 adapter（`file` → DeepSeek Files-API；`base64`/`url` → OpenAI 兼容内联）。可在 `dsh-tui-browser-use/vision` 替换。
-- **工具注册**：`buildToolDefinitions(deps)` / `registerTools(ctx, deps)` 构建并注册 21 个 `browser_*` 工具；注册表接受注入的 session + 视觉 resolver，宿主可包裹或扩展。
+- **工具注册**：`buildToolDefinitions(deps)` / `registerTools(ctx, deps)` 注册表接受注入的 session + 视觉 resolver，宿主可包裹或扩展。
 
 子路径导出：`dsh-tui-browser-use/driver`、`dsh-tui-browser-use/vision`、`dsh-tui-browser-use/types`。工具数与统一结果信封（`{ ok, value|error, usage? }`）属契约，不可改动。
 
 ## 已知限制
 
-该项目是纯Vibe Coding产物：功能实现与完整回归在无头 Linux 验证，Phase 5 会话档案真机验收已由用户确认全绿；macOS 仍未实测，接入时需做对应平台回归。欢迎拷打。
+该项目是纯Vibe Coding产物：功能实现与完整回归在无头 Linux 验证，欢迎拷打。
 
 ## 文档
 
