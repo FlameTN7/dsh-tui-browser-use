@@ -90,6 +90,19 @@ config:
 
 本插件于dsh-tui注册命名空间,可于dsh-tui的/settings看见常用设置,部分设置需要会话重启后生效
 
+### 环境变量覆盖（可选）
+
+常用配置也可经环境变量覆盖，部分需会话重启后生效：
+
+| 变量 | 作用 | 默认 |
+|---|---|---|
+| `DSH_TUI_BROWSER_PROVIDER` / `_MODEL` / `_BASE_URL` + `OPENAI_API_KEY` | 切换到 OpenAI 兼容视觉路由（非 DeepSeek 端点） | 内置 `deepseek` 路由 |
+| `DSH_TUI_BROWSER_DIALOG` | 弹窗策略 `dismiss` / `accept` / `ignore` | `dismiss` |
+| `DSH_TUI_BROWSER_ENGINE` | 浏览器引擎 `chromium` / `firefox` / `webkit` | `chromium` |
+| `DSH_TUI_BROWSER_PROXY` / `_PROXY_BYPASS` | 外网代理（浏览器启动时读取） | 无 |
+| `DSH_TUI_BROWSER_TIMEOUT_NAVIGATION` / `_ACTION` / `_SETTLE` | 导航 / 动作 / 收敛超时（ms） | 45000 / 12000 / 6000 |
+| `DSH_TUI_BROWSER_USER_DATA_DIR` / `_STORAGE_STATE` | 外部会话目录 / 登录态快照（读取失败回退全新会话） | 内置档案根 |
+
 ## 视觉管线（简述）
 
 ```

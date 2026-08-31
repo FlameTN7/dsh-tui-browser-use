@@ -88,6 +88,19 @@ config:
 
 The plugin registers a `browser-use` namespace in dsh-tui; common settings are visible in `/settings`, and some changes need a session restart to take effect.
 
+### Environment overrides (optional)
+
+Common settings can also be overridden via environment variables; some take effect only on session restart:
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `DSH_TUI_BROWSER_PROVIDER` / `_MODEL` / `_BASE_URL` + `OPENAI_API_KEY` | Switch to an OpenAI-compatible vision route (non-DeepSeek endpoint) | Built-in `deepseek` route |
+| `DSH_TUI_BROWSER_DIALOG` | Dialog policy `dismiss` / `accept` / `ignore` | `dismiss` |
+| `DSH_TUI_BROWSER_ENGINE` | Browser engine `chromium` / `firefox` / `webkit` | `chromium` |
+| `DSH_TUI_BROWSER_PROXY` / `_PROXY_BYPASS` | Outbound proxy (read at browser startup) | none |
+| `DSH_TUI_BROWSER_TIMEOUT_NAVIGATION` / `_ACTION` / `_SETTLE` | Navigation / action / settle timeouts (ms) | 45000 / 12000 / 6000 |
+| `DSH_TUI_BROWSER_USER_DATA_DIR` / `_STORAGE_STATE` | External session dir / login-state snapshot (falls back to a fresh session on failure) | built-in profile root |
+
 ## Vision pipeline (brief)
 
 ```
