@@ -52,7 +52,7 @@ export function validProfileName(name: string): boolean {
  * - Windows: `%LOCALAPPDATA%\dsh-tui-browser-use`
  * Tests inject a fixed `rootOverride` so resolution is deterministic cross-platform.
  */
-export function defaultProfileRoot(): string {
+function defaultProfileRoot(): string {
   if (process.platform === 'win32') {
     const base = process.env.LOCALAPPDATA
     if (base) return join(base, 'dsh-tui-browser-use')
@@ -67,7 +67,7 @@ export function defaultProfileRoot(): string {
 }
 
 /** A short unique run id for an isolated-session ephemeral dir. */
-export function runId(): string {
+function runId(): string {
   return `${Date.now().toString(36)}-${randomBytes(6).toString('hex')}`
 }
 
@@ -115,7 +115,7 @@ export interface ResolvedSessionPaths extends SessionPaths {
 }
 
 /** Compute the static directory set under a profile root. */
-export function pathsFor(root: string, profileName: string): SessionPaths {
+export function pathsFor(root: string): SessionPaths {
   return {
     root,
     profilesDir: join(root, 'profiles'),
@@ -140,7 +140,7 @@ export function profilePathsFor(root: string, rawName: string | undefined): {
 } {
   const name = validProfileName(rawName ?? '') ? (rawName as string) : DEFAULT_PROFILE_NAME
   return {
-    ...pathsFor(root, name),
+    ...pathsFor(root),
     profileDir: join(root, 'profiles', name),
     userDataDir: join(root, 'profiles', name, 'user-data'),
     storageStatePath: join(root, 'states', `${name}.storage-state.json`),
@@ -159,7 +159,7 @@ export function ephemeralPathsFor(root: string): {
   ephemeralRunDir: string
 } {
   const id = runId()
-  const base = pathsFor(root, DEFAULT_PROFILE_NAME)
+  const base = pathsFor(root)
   const runDir = join(base.ephemeralDir, id)
   return {
     ...base,
@@ -188,7 +188,7 @@ export function resolveSession(
   const root = rootOverride ?? defaultProfileRoot()
   const sess = config.session
   const profileName = sess?.profile ? (validProfileName(sess.profile) ? sess.profile : DEFAULT_PROFILE_NAME) : DEFAULT_PROFILE_NAME
-  const base = pathsFor(root, profileName)
+  const base = pathsFor(root)
   const envManaged = Boolean(env.userDataDir || env.storageStatePath)
 
   if (envManaged) {

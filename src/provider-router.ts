@@ -56,15 +56,6 @@ const TRANSFER: Record<string, ImageTransfer> = {
   deepseek: 'file',
 }
 
-/** Effective override env var names (values should never be logged). */
-export const ROUTE_ENV = {
-  provider: 'DSH_TUI_BROWSER_PROVIDER',
-  model: 'DSH_TUI_BROWSER_MODEL',
-  baseUrl: 'DSH_TUI_BROWSER_BASE_URL',
-  executable: 'DSH_TUI_BROWSER_EXECUTABLE',
-  proxy: 'DSH_TUI_BROWSER_PROXY',
-} as const
-
 /** Confirm a string is a non-empty provider id in the route table. */
 function isKnownProvider(p: string): p is keyof typeof ROUTES {
   return Object.prototype.hasOwnProperty.call(ROUTES, p)

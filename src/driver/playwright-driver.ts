@@ -116,7 +116,6 @@ export class PlaywrightDriver implements BrowserDriver {
   private _page: PwPage | null = null
   private _ctx: PwContext | null = null
   private _startError: string | null = null
-  private _lang: 'zh' | 'en' = 'zh'
 
   get startError(): string | null { return this._startError }
   get running(): boolean { return this._engine !== null && this._page !== null }
@@ -187,7 +186,6 @@ export class PlaywrightDriver implements BrowserDriver {
 
   async start(opts: DriverStartOptions): Promise<boolean> {
     if (this._engine !== null && this._page !== null) return true
-    this._lang = opts.lang
     const pw = await this.loadPlaywright()
     if (!pw) {
       this._startError = 'browser-core-missing'

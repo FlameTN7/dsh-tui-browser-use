@@ -13,8 +13,6 @@
  * wrinkle.
  */
 
-import type { ErrorCode } from './types.js'
-
 /** A structurally-typed JSON Schema node (enforced subset). */
 export interface SchemaNode {
   type?: 'object' | 'array' | 'string' | 'number' | 'integer' | 'boolean' | 'null' | string
@@ -137,9 +135,4 @@ export function parseJsonReply(text: string): unknown {
     }
   }
   return undefined
-}
-
-/** Wrap a schema-validation failure into a canonical error envelope. */
-export function schemaValidationFail(message: string): { ok: false; error: { code: ErrorCode; message: string } } {
-  return { ok: false, error: { code: 'schema-validation-failed', message } }
 }

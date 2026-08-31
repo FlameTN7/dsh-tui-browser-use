@@ -3,10 +3,8 @@
  *
  * Owns how the 21 `browser_*` tool definitions are registered on the harness
  * `ctx.tools` service. The registry keeps a `Map<name, disposer>` so every tool
- * can be independently unregistered, and exposes a `registerExtraTool` seam so
- * a host/third party can append an additional tool definition on the same
- * single-session dispatch without touching the bundled set (B4). The bundled
- * `buildToolDefinitions` stays in `tools.ts`; this module only wires them.
+ * can be independently unregistered. The bundled `buildToolDefinitions` stays
+ * in `tools.ts`; this module only wires them.
  */
 
 import type { ToolDeps, ToolDefinition } from '../tools.js'
@@ -36,21 +34,4 @@ export function registerTools(ctx: { get(name: string, optional?: boolean): unkn
     store.set(d.name, tools.register!({ ...d, execute }))
   }
   return () => store.forEach((d) => d())
-}
-
-/**
- * A seam for a host/third party to register an additional tool on the same
- * harness service, funneled through the session's serial mutex just like the
- * bundled tools. Returns the single disposer (unregister this tool).
- */
-export function registerExtraTool(
-  ctx: { get(name: string, optional?: boolean): unknown },
-  deps: ToolDeps,
-  definition: ToolDefinition,
-): (() => void) | null {
-  const tools = ctx.get('tools', false) as ToolsService | undefined
-  if (!tools?.register) return null
-  const execute = (args: unknown, exec: unknown): Promise<unknown> =>
-    deps.session.run(() => definition.execute(args, exec))
-  return tools.register!({ ...definition, execute })
 }
