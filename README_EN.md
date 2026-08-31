@@ -46,7 +46,7 @@ Tall pages are captured by `BrowserSession.captureSegments()` as multiple native
 |---|---|---|
 | Navigation | `browser_navigate` / `back` / `forward` / `reload` | Returns title + URL + status |
 | Interaction | `browser_click` / `type` / `hover` / `press` / `scroll` / `wait` | `text=`/`role=`/`label=`/CSS locators; `type` supports `clear` + `enter` |
-| Observation | `browser_screenshot` / `snapshot` / `evaluate` | Screenshot + vision; indexed DOM snapshot (nodes carry a cross-call stable `id`; optional `delta` returns incremental changes); in-page JS evaluation |
+| Observation | `browser_screenshot` / `snapshot` / `evaluate` | Screenshot + vision (`oversizeTiles` reports tiles still over the byte budget); indexed DOM snapshot (nodes carry a cross-call stable `id`; optional `delta` returns incremental changes); in-page JS evaluation |
 | Extraction/tasks | `browser_extract` / `task` | Schema validation with ≤2 retries; natural-language multi-step loop with cumulative cost |
 | Session | `browser_cookies` / `console_messages` / `network_requests` / `pdf` / `download` / `status` | Cookie values masked by default (`readValues` opt-in); console/network capture; PDF/download; `browser_status` also reports the effective session profile (`value.session`: mode/profile/sanitized profileDir/degraded) |
 
@@ -73,7 +73,7 @@ The `postinstall` hook detects a system Chrome or Playwright Chromium and prints
 
 ### Vision API key (optional, recommended)
 
-With `visionMode: auto`, the default route is official DeepSeek vision, keyed by `DEEPSEEK_API_KEY` (Files API). To use another OpenAI-compatible vision endpoint, override `DSH_TUI_BROWSER_PROVIDER` / `DSH_TUI_BROWSER_MODEL` / `DSH_TUI_BROWSER_BASE_URL` and resolve the key for that endpoint (e.g. `OPENAI_API_KEY`). When no vision-capable model is available, `browser_screenshot` returns `visionUsed:false` + `visionUnavailableReason`; DOM observation stays available through `browser_snapshot` and browser tools keep working.
+With `visionMode: auto`, the default route is official DeepSeek vision; keys resolve through the dsh-tui `credentials.resolve({env})` seam (which can reference profile `.credentials.yaml`). Only hosts WITHOUT a credentials service (stub/third-party hosts) fall back to `DEEPSEEK_API_KEY` / `OPENAI_API_KEY` env vars. To use another OpenAI-compatible vision endpoint, override `DSH_TUI_BROWSER_PROVIDER` / `DSH_TUI_BROWSER_MODEL` / `DSH_TUI_BROWSER_BASE_URL` and resolve the key for that endpoint (e.g. `OPENAI_API_KEY`). `DEEPSEEK_BASE_URL` only applies to the DeepSeek route. When no vision-capable model is available, `browser_screenshot` returns `visionUsed:false` + `visionUnavailableReason`; DOM observation stays available through `browser_snapshot` and browser tools keep working.
 
 ### Session profile modes (optional)
 
@@ -102,11 +102,12 @@ Some of these are also exposed in the TUI Settings screen for quick adjustment.
 | `DSH_TUI_BROWSER_ENGINE` | Browser engine: `chromium` (default) / `firefox` / `webkit` |
 | `DSH_TUI_BROWSER_EXECUTABLE` | Point at an existing Chromium binary |
 | `DSH_TUI_BROWSER_PROVIDER` / `_MODEL` / `_BASE_URL` | Override vision provider / model / endpoint |
+| `DEEPSEEK_BASE_URL` | DeepSeek official endpoint override (applies to the DeepSeek route only, never to other providers) |
 | `DSH_TUI_BROWSER_PROXY` | HTTP proxy for the browser; `DSH_TUI_BROWSER_PROXY_BYPASS` overrides the loopback bypass list |
-| `DSH_TUI_BROWSER_USER_DATA_DIR` / `_STORAGE_STATE` | Persist login state / export-import a storageState snapshot. Takes precedence over `session.mode` (env is external to the plugin-managed profiles) |
+| `DSH_TUI_BROWSER_USER_DATA_DIR` / `_STORAGE_STATE` | Persist login state / export-import a storageState snapshot (a malformed snapshot falls back to a fresh session instead of blocking startup). Takes precedence over `session.mode` (env is external to the plugin-managed profiles) |
 | `DSH_TUI_BROWSER_DIALOG` | Dialog policy: `dismiss` (default) / `accept` / `ignore` |
-| `DSH_TUI_BROWSER_TIMEOUT_NAVIGATION` / `_ACTION` / `_SETTLE` | Timeouts in ms (defaults 45000 / 12000 / 6000) |
-| `DSH_TUI_BROWSER_MAX_TILES` | Max scroll-capture segments (default 24) |
+| `DSH_TUI_BROWSER_TIMEOUT_NAVIGATION` / `_ACTION` / `_SETTLE` | Timeouts in ms (defaults 45000 / 12000 / 6000; 0/negative falls back to the default — never infinite) |
+| `DSH_TUI_BROWSER_MAX_TILES` | Max scroll-capture segments (default 24; 0/negative falls back to the default) |
 
 ### Settings panel
 
@@ -119,12 +120,12 @@ Playwright screenshot
   → capture-time JPEG compression (quality staircase 80→60→40, drop on budget).
     Pipeline size/byte validation; no pixel-level scaling.
   → exceeds tiling.threshold? → scroll-capture (native-res images, wide pages split into columns)
-  → DeepSeek Files API → file_id reference (content-hash reuse, prompt-cache friendly)
+  → DeepSeek Files API → file_id reference (content-hash reuse before expiry, prompt-cache friendly)
   → OpenAI-compatible endpoint → base64 inline
   → no vision model → short-circuit (visionUsed:false + visionUnavailableReason)
 ```
 
-- **Files API**: with an official DeepSeek vision model, screenshots are uploaded once and referenced many times; request bodies do not grow with base64 and cache hits are easier to achieve. Uploads expire after 24h by default (`DSH_TUI_BROWSER_FILE_EXPIRES_SECONDS`); identical screenshots reuse one file_id.
+- **Files API**: with an official DeepSeek vision model, screenshots are uploaded once and referenced many times; request bodies do not grow with base64 and cache hits are easier to achieve. Uploads expire after 24h by default (`DSH_TUI_BROWSER_FILE_EXPIRES_SECONDS`); identical screenshots reuse one file_id only until shortly before expiry (the cache invalidates ~10s early and re-uploads).
 - **Reliability**: vision requests retry 429/5xx with exponential backoff; `browser_extract` retries parse/schema failures ≤2 times with the violation list attached.
 - **Prompt-injection defense**: vision instructions are fenced with `<task>…</task>` and the system message declares screenshots untrusted page content — instructions inside a page are data, never directives.
 
@@ -133,9 +134,10 @@ Playwright screenshot
 ```sh
 npm run build           # tsc → lib/types/
 npm run check           # CI gate: build + smoke(21 tools) + manifest + i18n + router
-npm run test:logic      # 17 pure-logic regression suites (no browser/key; incl. session profiles / start-failure lock release / snapshot delta / driver contract / runtime env)
+npm run test:logic      # 18 pure-logic regression suites (no browser/key; incl. session profiles / start-failure lock release / snapshot delta / driver contract / secret probe / runtime env)
 npm run test:container  # stub harness loads the artifact + real browser boot (21 tools)
 npm run test:integration # live browser integration (navigate/click/type/screenshot/tiling/snapshot)
+npm run test:storage-state # storageState corruption fallback + persistent import (live browser)
 ```
 
 ## Programmatic use / extension points
@@ -161,7 +163,7 @@ Subpath exports: `dsh-tui-browser-use/driver`, `dsh-tui-browser-use/vision`,
 
 ## Known limitations
 
-This project is a pure Vibe Coding product: it has only been initially implemented and verified in a headless Linux environment. Feedback — including hard scrutiny — is welcome.
+This project is a pure Vibe Coding product: implementation and the full regression suite are verified on headless Linux, and the Phase 5 session-profile acceptance tests were confirmed green by the user on a real dsh-tui setup. macOS remains untested and needs a platform regression when adopted. Feedback — including hard scrutiny — is welcome.
 
 ## Docs
 

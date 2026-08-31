@@ -47,7 +47,7 @@
 |---|---|---|
 | 导航 | `browser_navigate` / `back` / `forward` / `reload` | 返回标题 + URL + 状态码 |
 | 交互 | `browser_click` / `type` / `hover` / `press` / `scroll` / `wait` | 支持 `text=`/`role=`/`label=`/CSS 定位；`type` 可选 `clear` + `enter` |
-| 观察 | `browser_screenshot` / `snapshot` / `evaluate` | 截图 + 视觉分析；DOM 元素索引快照（节点带跨调用稳定 `id`，可选 `delta` 返回增量）；页面内 JS 求值 |
+| 观察 | `browser_screenshot` / `snapshot` / `evaluate` | 截图 + 视觉分析（`oversizeTiles` 报告超字节预算的段数）；DOM 元素索引快照（节点带跨调用稳定 `id`，可选 `delta` 返回增量）；页面内 JS 求值 |
 | 提取/任务 | `browser_extract` / `task` | schema 校验 + 失败重试 ≤2；自然语言多步循环，累计成本 |
 | 会话 | `browser_cookies` / `console_messages` / `network_requests` / `pdf` / `download` / `status` | cookie 值默认掩码、`readValues` 可选；console/网络捕获；PDF/下载；`browser_status` 额外报告运行期会话档案（`value.session`：mode/profile/profileDir 脱敏/degraded） |
 
@@ -74,7 +74,7 @@ npx playwright install chromium --with-deps   # Linux；Windows/macOS 去掉 --w
 
 ### 视觉 API key（可选，建议配置）
 
-`visionMode: auto` 默认走官方 DeepSeek 视觉路由，密钥取 `DEEPSEEK_API_KEY`（官方 Files API）。需要接入其他 OpenAI 兼容视觉端点时，用 `DSH_TUI_BROWSER_PROVIDER` / `DSH_TUI_BROWSER_MODEL` / `DSH_TUI_BROWSER_BASE_URL` 覆盖，密钥按该端点解析（如 `OPENAI_API_KEY`）。无可用视觉模型时，`browser_screenshot` 返回 `visionUsed:false` + `visionUnavailableReason`；DOM 观察由 `browser_snapshot` 承担，浏览器工具不受影响。
+`visionMode: auto` 默认走官方 DeepSeek 视觉路由，密钥经 dsh-tui 的 `credentials.resolve({env})` 解析（可引用 profile `.credentials.yaml`）；只有宿主**没有** credentials 服务时（stub/第三方宿主）才回退读 `DEEPSEEK_API_KEY` / `OPENAI_API_KEY` 环境变量。需要接入其他 OpenAI 兼容视觉端点时，用 `DSH_TUI_BROWSER_PROVIDER` / `DSH_TUI_BROWSER_MODEL` / `DSH_TUI_BROWSER_BASE_URL` 覆盖，密钥按该端点解析（如 `OPENAI_API_KEY`）。`DEEPSEEK_BASE_URL` 只对 DeepSeek 路由生效。无可用视觉模型时，`browser_screenshot` 返回 `visionUsed:false` + `visionUnavailableReason`；DOM 观察由 `browser_snapshot` 承担，浏览器工具不受影响。
 
 ### 会话档案模式（可选）
 
@@ -103,11 +103,12 @@ config:
 | `DSH_TUI_BROWSER_ENGINE` | 浏览器引擎：`chromium`（默认）/ `firefox` / `webkit` |
 | `DSH_TUI_BROWSER_EXECUTABLE` | 指向已有 Chromium 二进制 |
 | `DSH_TUI_BROWSER_PROVIDER` / `_MODEL` / `_BASE_URL` | 覆盖视觉 provider / 模型 / 端点 |
+| `DEEPSEEK_BASE_URL` | DeepSeek 官方端点覆盖（仅对 DeepSeek 路由生效，不会影响其他 provider） |
 | `DSH_TUI_BROWSER_PROXY` | 浏览器 HTTP 代理；`DSH_TUI_BROWSER_PROXY_BYPASS` 覆盖回环绕过列表 |
-| `DSH_TUI_BROWSER_USER_DATA_DIR` / `_STORAGE_STATE` | 持久化登录态 / 导出导入 storageState 快照。设置 `session.mode` 后优先级低于该 env（env 优先，独立于插件管理档案） |
+| `DSH_TUI_BROWSER_USER_DATA_DIR` / `_STORAGE_STATE` | 持久化登录态 / 导出导入 storageState 快照（快照损坏时自动回退全新会话，不阻断启动）。设置 `session.mode` 后优先级低于该 env（env 优先，独立于插件管理档案） |
 | `DSH_TUI_BROWSER_DIALOG` | 弹窗策略：`dismiss`（默认）/ `accept` / `ignore` |
-| `DSH_TUI_BROWSER_TIMEOUT_NAVIGATION` / `_ACTION` / `_SETTLE` | 超时 ms（默认 45000 / 12000 / 6000） |
-| `DSH_TUI_BROWSER_MAX_TILES` | 滚屏分段最大段数（默认 24） |
+| `DSH_TUI_BROWSER_TIMEOUT_NAVIGATION` / `_ACTION` / `_SETTLE` | 超时 ms（默认 45000 / 12000 / 6000；0 或负数回退默认，不会无限等待） |
+| `DSH_TUI_BROWSER_MAX_TILES` | 滚屏分段最大段数（默认 24；0 或负数回退默认） |
 
 ### 设置面板
 
@@ -119,12 +120,12 @@ config:
 Playwright 截图
   → 捕获期 JPEG 压缩（品质 80→60→40 阶梯，超预算降档）；管线尺寸/字节校验（不做像素级缩放）
   → 超过 tiling.threshold？ → 滚屏分段（原生分辨率多图，含宽页分列）
-  → DeepSeek Files API → file_id 引用（按内容 hash 复用，命中 prompt cache）
+  → DeepSeek Files API → file_id 引用（过期前按内容 hash 复用，命中 prompt cache）
   → OpenAI 兼容端点 → base64 内联
   → 无视觉模型 → 短路（visionUsed:false + visionUnavailableReason）
 ```
 
-- **Files API**：使用DeepSeek官方视觉模型时，截图上传一次可多次引用，请求体不随 base64 膨胀且更易于命中缓存；文件默认 24h 过期（`DSH_TUI_BROWSER_FILE_EXPIRES_SECONDS` 可调），同一截图按内容复用 file_id。
+- **Files API**：使用DeepSeek官方视觉模型时，截图上传一次可多次引用，请求体不随 base64 膨胀且更易于命中缓存；文件默认 24h 过期（`DSH_TUI_BROWSER_FILE_EXPIRES_SECONDS` 可调），同一截图在**文件过期前**按内容复用 file_id（缓存会在过期前约 10s 失效并重新上传）。
 - **可靠性**：视觉请求 429/5xx 指数退避重试；`browser_extract` schema 校验失败重试 ≤2 次并附 violation 清单。
 - **提示注入防护**：视觉指令用 `<task>…</task>` 定界，system 消息声明截图是不可信页面内容，页内指令一律按数据处理。
 
@@ -133,9 +134,10 @@ Playwright 截图
 ```sh
 npm run build           # tsc → lib/types/
 npm run check           # CI 门禁：build + smoke(21 tools) + manifest + i18n + router
-npm run test:logic      # 17 个纯逻辑回归（无需浏览器/key；含会话档案/启动失败锁释放/快照 delta/驱动契约/运行时环境等）
+npm run test:logic      # 18 个纯逻辑回归（无需浏览器/key；含会话档案/启动失败锁释放/快照 delta/驱动契约/密钥探测/运行时环境等）
 npm run test:container  # stub harness 加载产物 + 真实启动浏览器（21 工具注册）
 npm run test:integration # 真实浏览器集成（导航/点击/输入/截图/切分/快照）
+npm run test:storage-state # storageState 损坏回退 + persistent 导入（真实浏览器）
 ```
 
 ## 编程接口 / 扩展点
@@ -150,7 +152,7 @@ npm run test:integration # 真实浏览器集成（导航/点击/输入/截图/�
 
 ## 已知限制
 
-该项目是纯Vibe Coding产物，仅于无头Linux环境进行初步的功能实现与验证，欢迎拷打
+该项目是纯Vibe Coding产物：功能实现与完整回归在无头 Linux 验证，Phase 5 会话档案真机验收已由用户确认全绿；macOS 仍未实测，接入时需做对应平台回归。欢迎拷打。
 
 ## 文档
 
