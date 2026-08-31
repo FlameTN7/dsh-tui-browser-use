@@ -34,6 +34,39 @@ import {
   type ResolvedSessionPaths,
 } from './session-profiles.js'
 
+// ── Abort wiring (B8) ────────────────────────────────────────────────────
+
+/**
+ * Throw a `timed-out` BrowserToolError when the cooperative abort signal has
+ * already fired. Called at the START of every dispatchable browser operation
+ * (navigate/click/type/scroll/download/...) so a tool whose wall-clock budget
+ * expired does not issue a Playwright call that could still mutate the page —
+ * the operation is short-circuited BEFORE it is dispatched (竞品 B8).
+ */
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw new BrowserToolError('timed-out', 'operation aborted before dispatch')
+  }
+}
+
+/**
+ * Race a Playwright navigation/eval promise against the abort signal. Playwright
+ * does not accept an abort signal, so a `page.goto` to a hung host can outlive
+ * the tool's wall-clock budget and get the tool hard-killed by the host instead
+ * of returning its own envelope. The budget (`AbortSignal.timeout` composed in
+ * `abortSignalOf`) fires first → we surface `timed-out` and discard the stale
+ * Playwright promise; the session is still serialized, so a leftover operation
+ * cannot interleave with the next tool.
+ */
+function raceAbort<T>(p: Promise<T>, signal: AbortSignal | undefined, message = 'operation aborted before dispatch'): Promise<T> {
+  if (!signal) return p
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new BrowserToolError('timed-out', message))
+    signal.addEventListener('abort', onAbort, { once: true })
+    p.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort))
+  })
+}
+
 // ── Structural Playwright types (no hard dependency) ─────────────────────
 
 interface PwElementHandle {
@@ -161,21 +194,6 @@ interface PwApiResponse {
 interface PwApiRequestContext {
   get(url: string, opts?: { timeout?: number }): Promise<PwApiResponse>
 }
-
-interface PwBrowser {
-  close(): Promise<void>
-  newPage(): Promise<PwPage>
-  newContext(opts?: { storageState?: string }): Promise<PwContext>
-  version(): string
-  context(): { newPage(): Promise<PwPage> }
-}
-
-interface PwChromium {
-  launch(opts: { channel?: string; executablePath?: string; headless?: boolean; args?: string[]; proxy?: { server: string; bypass?: string } }): Promise<PwBrowser>
-}
-
-/** Common launch options shared by every Playwright browser engine. */
-type PwLaunchOptions = { channel?: string; executablePath?: string; headless?: boolean; args?: string[]; proxy?: { server: string; bypass?: string }; userDataDir?: string }
 
 /**
  * Wait for a dynamically-rendered target (SPA / lazy content) to be actionable
@@ -393,7 +411,6 @@ export class BrowserSession {
   private sessionLocked = false
   /** Whether a persistent lock conflict degraded this run to an isolated session. */
   private degraded = false
-  private readonly dialog: 'accept' | 'dismiss' | 'ignore'
 
   // ── Console / network capture (P1 #7) ───────────────────────────────────
   // Ring buffers of recent console messages and network requests so the agent
@@ -414,7 +431,6 @@ export class BrowserSession {
     this.navTimeoutMs = env.navTimeoutMs
     this.actionTimeoutMs = env.actionTimeoutMs
     this.settleTimeoutMs = env.settleTimeoutMs
-    this.dialog = env.dialog
     this.sessionPaths = resolveSession(config, env)
   }
 
@@ -626,7 +642,8 @@ export class BrowserSession {
 
   // ── Tools ──────────────────────────────────────────────────────────────
 
-  async navigate(params: NavigateParams): Promise<NavigateResult> {
+  async navigate(params: NavigateParams, signal?: AbortSignal): Promise<NavigateResult> {
+    throwIfAborted(signal)
     if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
     const page = this.requirePage()
     try {
@@ -635,7 +652,8 @@ export class BrowserSession {
       // delayed far past a sane timeout. DOM-ready is enough to read the title
       // and interact; the follow-up `waitForLoadState('load')` is best-effort and
       // never blocks a successful navigate.
-      const resp = await page.goto(params.url, { waitUntil: 'domcontentloaded', timeout: this.navTimeoutMs })
+      throwIfAborted(signal)
+      const resp = await raceAbort(page.goto(params.url, { waitUntil: 'domcontentloaded', timeout: this.navTimeoutMs }), signal)
       await page.waitForLoadState('load').catch(() => undefined)
       // Let the layout settle rather than racing a still-parsing document.
       await this.settlePage()
@@ -647,12 +665,16 @@ export class BrowserSession {
         status: resp?.status() ?? null,
       }
     } catch (err) {
+      // Preserve a canonical tool error (e.g. B8 `timed-out`) — only wrap
+      // unexpected runtime failures into the generic `browser-error`.
+      if (err instanceof BrowserToolError) throw err
       const msg = err instanceof Error ? err.message : String(err)
       throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
     }
   }
 
-  async click(params: ClickParams): Promise<ClickResult> {
+  async click(params: ClickParams, signal?: AbortSignal): Promise<ClickResult> {
+    throwIfAborted(signal)
     if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
     const page = this.requirePage()
     const before = page.url()
@@ -662,8 +684,10 @@ export class BrowserSession {
       // `text` (visible text) wins over `selector` (CSS); a bare selector keeps
       // using the CSS path. Searches main frame then child frames (iframe).
       // Wait for the target to be actionable (SPA/lazy).
+      throwIfAborted(signal)
       const locator = await resolveFrameAware(page, params.selector, params.text)
       await waitForLocator(locator, this.actionTimeoutMs)
+      throwIfAborted(signal)
       await locator.first().click({ timeout: this.actionTimeoutMs })
       await page.waitForLoadState('load').catch(() => undefined)
       await this.settlePage()
@@ -671,12 +695,16 @@ export class BrowserSession {
       if (wantDelta) { const d = await this.readSnapshotDelta(); if (d) result.delta = d }
       return result
     } catch (err) {
+      // Preserve a canonical tool error (e.g. B8 `timed-out`) — only wrap
+      // unexpected runtime failures into the generic `browser-error`.
+      if (err instanceof BrowserToolError) throw err
       const msg = err instanceof Error ? err.message : String(err)
       throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
     }
   }
 
-  async type(params: TypeParams): Promise<TypeResult> {
+  async type(params: TypeParams, signal?: AbortSignal): Promise<TypeResult> {
+    throwIfAborted(signal)
     if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
     const page = this.requirePage()
     const wantDelta = params.delta === true
@@ -685,8 +713,10 @@ export class BrowserSession {
       // `type` uses a CSS selector (the caller queries the field). Search main
       // frame then child frames, and wait for the input before filling so a SPA
       // that mounts its form late doesn't miss.
+      throwIfAborted(signal)
       const locator = await resolveFrameAware(page, params.selector, undefined)
       await waitForLocator(locator, this.actionTimeoutMs)
+      throwIfAborted(signal)
       const field = locator.first()
       if (params.clear) await field.clear({ timeout: this.actionTimeoutMs }).catch(() => undefined)
       await field.fill(params.text, { timeout: this.actionTimeoutMs })
@@ -700,6 +730,9 @@ export class BrowserSession {
       if (wantDelta) { const d = await this.readSnapshotDelta(); if (d) result.delta = d }
       return result
     } catch (err) {
+      // Preserve a canonical tool error (e.g. B8 `timed-out`) — only wrap
+      // unexpected runtime failures into the generic `browser-error`.
+      if (err instanceof BrowserToolError) throw err
       const msg = err instanceof Error ? err.message : String(err)
       throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
     }
@@ -713,46 +746,62 @@ export class BrowserSession {
     return { title: await page.title(), url: sanitizeUrl(resp?.url() ?? fallbackUrl, this.env.sensitiveQueryKeys), status: resp?.status() ?? null }
   }
 
-  async back(): Promise<NavigationResult> {
+  async back(signal?: AbortSignal): Promise<NavigationResult> {
+    throwIfAborted(signal)
     if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
     const page = this.requirePage()
     try {
       const before = page.url()
-      const resp = await page.goBack({ waitUntil: 'domcontentloaded', timeout: this.navTimeoutMs })
+      throwIfAborted(signal)
+      const resp = await raceAbort(page.goBack({ waitUntil: 'domcontentloaded', timeout: this.navTimeoutMs }), signal)
       return await this.navSettle(resp, before)
     } catch (err) {
+      // Preserve a canonical tool error (e.g. B8 `timed-out`) — only wrap
+      // unexpected runtime failures into the generic `browser-error`.
+      if (err instanceof BrowserToolError) throw err
       const msg = err instanceof Error ? err.message : String(err)
       throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
     }
   }
 
-  async forward(): Promise<NavigationResult> {
+  async forward(signal?: AbortSignal): Promise<NavigationResult> {
+    throwIfAborted(signal)
     if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
     const page = this.requirePage()
     try {
       const before = page.url()
-      const resp = await page.goForward({ waitUntil: 'domcontentloaded', timeout: this.navTimeoutMs })
+      throwIfAborted(signal)
+      const resp = await raceAbort(page.goForward({ waitUntil: 'domcontentloaded', timeout: this.navTimeoutMs }), signal)
       return await this.navSettle(resp, before)
     } catch (err) {
+      // Preserve a canonical tool error (e.g. B8 `timed-out`) — only wrap
+      // unexpected runtime failures into the generic `browser-error`.
+      if (err instanceof BrowserToolError) throw err
       const msg = err instanceof Error ? err.message : String(err)
       throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
     }
   }
 
-  async reload(): Promise<NavigationResult> {
+  async reload(signal?: AbortSignal): Promise<NavigationResult> {
+    throwIfAborted(signal)
     if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
     const page = this.requirePage()
     try {
       const before = page.url()
-      const resp = await page.reload({ waitUntil: 'domcontentloaded', timeout: this.navTimeoutMs })
+      throwIfAborted(signal)
+      const resp = await raceAbort(page.reload({ waitUntil: 'domcontentloaded', timeout: this.navTimeoutMs }), signal)
       return await this.navSettle(resp, before)
     } catch (err) {
+      // Preserve a canonical tool error (e.g. B8 `timed-out`) — only wrap
+      // unexpected runtime failures into the generic `browser-error`.
+      if (err instanceof BrowserToolError) throw err
       const msg = err instanceof Error ? err.message : String(err)
       throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
     }
   }
 
-  async scroll(params: ScrollParams): Promise<ScrollResult> {
+  async scroll(params: ScrollParams, signal?: AbortSignal): Promise<ScrollResult> {
+    throwIfAborted(signal)
     if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
     const page = this.requirePage()
     const x = Math.trunc(Number(params.x) || 0)
@@ -760,6 +809,7 @@ export class BrowserSession {
     const wantDelta = params.delta === true
     if (wantDelta) await this.setSnapshotBaseline()
     try {
+      throwIfAborted(signal)
       await page.evaluate(`window.scrollBy(${x}, ${y})`)
       await this.settlePage()
       const pos = await page.evaluate<{ x: number; y: number }>('({ x: window.scrollX, y: window.scrollY })').catch(() => ({ x, y }))
@@ -767,54 +817,85 @@ export class BrowserSession {
       if (wantDelta) { const d = await this.readSnapshotDelta(); if (d) result.delta = d }
       return result
     } catch (err) {
+      // Preserve a canonical tool error (e.g. B8 `timed-out`) — only wrap
+      // unexpected runtime failures into the generic `browser-error`.
+      if (err instanceof BrowserToolError) throw err
       const msg = err instanceof Error ? err.message : String(err)
       throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
     }
   }
 
-  async press(params: PressParams): Promise<PressResult> {
+  async press(params: PressParams, signal?: AbortSignal): Promise<PressResult> {
+    throwIfAborted(signal)
     if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
     const page = this.requirePage()
     try {
+      throwIfAborted(signal)
       await page.keyboard.press(params.key)
       return { success: true }
     } catch (err) {
+      // Preserve a canonical tool error (e.g. B8 `timed-out`) — only wrap
+      // unexpected runtime failures into the generic `browser-error`.
+      if (err instanceof BrowserToolError) throw err
       const msg = err instanceof Error ? err.message : String(err)
       throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
     }
   }
 
   /** Wait for a selector to become visible, or sleep for `ms`. */
-  async wait(params: WaitParams): Promise<WaitResult> {
+  async wait(params: WaitParams, signal?: AbortSignal): Promise<WaitResult> {
+    throwIfAborted(signal)
     if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
     const page = this.requirePage()
     try {
       if (params.selector) {
+        throwIfAborted(signal)
         const locator = await resolveFrameAware(page, params.selector, undefined)
         await waitForLocator(locator, params.timeoutMs ?? this.settleTimeoutMs)
         return { waited: true, visible: true }
       }
       const ms = Math.max(0, Math.min(Number(params.ms) || 0, 30_000))
-      if (ms > 0) await new Promise((r) => setTimeout(r, ms))
+      if (ms > 0) {
+        // Abortable sleep: a tool that exceeded its wall-clock budget must not
+        // sit in a bare setTimeout while the harness already gave up (B8).
+        if (signal) {
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, ms)
+            signal.addEventListener('abort', () => { clearTimeout(timer); resolve() }, { once: true })
+          })
+          throwIfAborted(signal)
+        } else {
+          await new Promise((r) => setTimeout(r, ms))
+        }
+      }
       return { waited: true, ...(ms > 0 ? { ms } : {}) }
     } catch (err) {
+      // Preserve a canonical tool error (e.g. B8 `timed-out`) — only wrap
+      // unexpected runtime failures into the generic `browser-error`.
+      if (err instanceof BrowserToolError) throw err
       const msg = err instanceof Error ? err.message : String(err)
       throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
     }
   }
 
-  async hover(params: HoverParams): Promise<HoverResult> {
+  async hover(params: HoverParams, signal?: AbortSignal): Promise<HoverResult> {
+    throwIfAborted(signal)
     if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
     const page = this.requirePage()
     try {
       // `text` (visible text) wins over `selector`; search main frame then frames.
+      throwIfAborted(signal)
       const locator = await resolveFrameAware(page, params.selector, params.text)
       await waitForLocator(locator, this.actionTimeoutMs)
+      throwIfAborted(signal)
       await locator.first().hover({ timeout: this.actionTimeoutMs })
       // Let any hover-triggered UI settle a beat.
       await page.evaluate('new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))').catch(() => undefined)
       return { success: true }
     } catch (err) {
+      // Preserve a canonical tool error (e.g. B8 `timed-out`) — only wrap
+      // unexpected runtime failures into the generic `browser-error`.
+      if (err instanceof BrowserToolError) throw err
       const msg = err instanceof Error ? err.message : String(err)
       throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
     }
@@ -834,6 +915,9 @@ export class BrowserSession {
       const readValues = params.readValues === true
       return { cookies: cookies.map((c) => ({ ...c, value: cookieValue(c.value, readValues) })) }
     } catch (err) {
+      // Preserve a canonical tool error (e.g. B8 `timed-out`) — only wrap
+      // unexpected runtime failures into the generic `browser-error`.
+      if (err instanceof BrowserToolError) throw err
       const msg = err instanceof Error ? err.message : String(err)
       throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
     }
@@ -853,13 +937,18 @@ export class BrowserSession {
     return { requests: out }
   }
 
-  async evaluate(params: EvaluateParams): Promise<EvaluateResult> {
+  async evaluate(params: EvaluateParams, signal?: AbortSignal): Promise<EvaluateResult> {
+    throwIfAborted(signal)
     if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
     const page = this.requirePage()
     try {
-      const result = await page.evaluate(params.expression as unknown as string)
+      throwIfAborted(signal)
+      const result = await raceAbort(page.evaluate(params.expression as unknown as string), signal)
       return { result }
     } catch (err) {
+      // Preserve a canonical tool error (e.g. B8 `timed-out`) — only wrap
+      // unexpected runtime failures into the generic `browser-error`.
+      if (err instanceof BrowserToolError) throw err
       const msg = err instanceof Error ? err.message : String(err)
       throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
     }
@@ -1011,6 +1100,9 @@ export class BrowserSession {
       writeFileSync(outPath, buf)
       return { url: sanitizeUrl(page.url(), this.env.sensitiveQueryKeys), path: outPath, bytes: buf.length }
     } catch (err) {
+      // Preserve a canonical tool error (e.g. B8 `timed-out`) — only wrap
+      // unexpected runtime failures into the generic `browser-error`.
+      if (err instanceof BrowserToolError) throw err
       const msg = err instanceof Error ? err.message : String(err)
       throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
     }
@@ -1023,13 +1115,15 @@ export class BrowserSession {
    * omitted a temp file is used); the result reports the absolute path and byte
    * size so the agent can hand the artifact off.
    */
-  async download(params: DownloadParams): Promise<DownloadResult> {
+  async download(params: DownloadParams, signal?: AbortSignal): Promise<DownloadResult> {
+    throwIfAborted(signal)
     if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
     const context = this.requireContext()
     // Request the RAW URL (a signed/token URL must not be scrubbed) — only the
     // displayed URL is sanitized so a secret never leaks into the model context.
     const url = requestUrl(params.url)
     try {
+      throwIfAborted(signal)
       const resp = await context.request.get(url, { timeout: this.navTimeoutMs })
       if (!resp.ok()) {
         throw new BrowserToolError('browser-error', t('error.download', this.lang, { message: `HTTP ${resp.status()}` }))
@@ -1050,6 +1144,9 @@ export class BrowserSession {
         contentType: resp.headers()['content-type'],
       }
     } catch (err) {
+      // Preserve a canonical tool error (e.g. B8 `timed-out`) — only wrap
+      // unexpected runtime failures into the generic `browser-error`.
+      if (err instanceof BrowserToolError) throw err
       const msg = err instanceof Error ? err.message : String(err)
       throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
     }
@@ -1224,6 +1321,9 @@ export class BrowserSession {
       }
       return { nodes: out, ...(raw.total !== undefined ? { total: raw.total } : {}), ...(raw.truncated !== undefined ? { truncated: raw.truncated } : {}), ...(raw.delta !== undefined ? { delta: sanitizeDelta(raw.delta) } : {}) }
     } catch (err) {
+      // Preserve a canonical tool error (e.g. B8 `timed-out`) — only wrap
+      // unexpected runtime failures into the generic `browser-error`.
+      if (err instanceof BrowserToolError) throw err
       const msg = err instanceof Error ? err.message : String(err)
       throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: msg }))
     }
@@ -1286,11 +1386,6 @@ export class BrowserToolError extends Error {
     this.name = 'BrowserToolError'
     this.code = code
   }
-}
-
-/** Convenience: format an error into a failure envelope. */
-export function errorEnvelope(code: ErrorCode, message: string): { ok: false; error: { code: ErrorCode; message: string } } {
-  return { ok: false, error: { code, message } }
 }
 
 // Re-export the i18n template type so tools.ts can build error strings.
