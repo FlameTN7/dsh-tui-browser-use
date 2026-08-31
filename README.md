@@ -9,10 +9,8 @@
 ## 功能特色
 
 - **21 个工具**：浏览、交互、观察、结构化提取、自然语言多步任务、文件下载等。
-- **视觉理解**：DeepSeek Files API（官方）或 OpenAI 兼容 base64 两种传输；
 - **超级拼装**: 针对DeepSeek官方识图后端的严格压缩进行适配,长页或宽页自动滚屏分段、分片、截断上传,确保识图的精度。
 - **会话能力**：会话档案与登录态管理（`session.mode` 持久化 / isolated 独立、锁文件防并发、冲突自动降级为独立临时档案、整目录可打包迁移），弹窗策略、串行互斥、导航/动作/收敛三类超时。
-- **文件交互**：`browser_screenshot.savePath` 截图落盘、`browser_download` 带会话 cookie 下载文件。
 - **安全策略**：视觉提示注入防护（`<task>` 定界，截图视为不可信内容）、URL/敏感 query/cookie 脱敏、无沙箱参数按需门控。
 - **浏览器引擎支持**：chromium（默认内嵌,可跨平台）/ firefox / webkit，配置可进 dsh-tui `/settings` 面板修改。
 
@@ -69,11 +67,7 @@ npx playwright install chromium --with-deps   # Linux；Windows/macOS 去掉 --w
         visionMode: 'auto'
 ```
 
-`postinstall` 会检测系统 Chrome / Playwright Chromium，缺失时输出可复制的安装命令；也可用 `DSH_TUI_BROWSER_EXECUTABLE` 直接指向已有 Chromium。浏览器缺失时工具返回 `browser-error` + 修复指引，不静默崩溃。
-
-### 视觉 API key（可选，建议配置）
-
-`visionMode: auto` 默认走官方 DeepSeek 视觉路由，密钥经 dsh-tui 的 `credentials.resolve({env})` 解析（可引用 profile `.credentials.yaml`）；只有宿主**没有** credentials 服务时（stub/第三方宿主）才回退读 `DEEPSEEK_API_KEY` / `OPENAI_API_KEY` 环境变量。需要接入其他 OpenAI 兼容视觉端点时，用 `DSH_TUI_BROWSER_PROVIDER` / `DSH_TUI_BROWSER_MODEL` / `DSH_TUI_BROWSER_BASE_URL` 覆盖，密钥按该端点解析（如 `OPENAI_API_KEY`）。`DEEPSEEK_BASE_URL` 只对 DeepSeek 路由生效。无可用视觉模型时，`browser_screenshot` 返回 `visionUsed:false` + `visionUnavailableReason`；DOM 观察由 `browser_snapshot` 承担，浏览器工具不受影响。
+`postinstall` 会检测系统 Chrome / Playwright Chromium，缺失时输出可复制的安装命令；也可用 `DSH_TUI_BROWSER_EXECUTABLE` 直接指向已有 Chromium。
 
 ### 会话档案模式（可选）
 
@@ -100,11 +94,10 @@ config:
 
 ```
 Playwright 截图
-  → 捕获期 JPEG 压缩（品质 80→60→40 阶梯，超预算降档）；管线尺寸/字节校验（不做像素级缩放）
+  → 捕获期 JPEG 压缩（品质 80→60→40 阶梯，超预算降档）；管线尺寸/字节校验
   → 超过 tiling.threshold？ → 滚屏分段（原生分辨率多图，含宽页分列）
   → DeepSeek Files API → file_id 引用（过期前按内容 hash 复用，命中 prompt cache）
   → OpenAI 兼容端点 → base64 内联
-  → 无视觉模型 → 短路（visionUsed:false + visionUnavailableReason）
 ```
 
 ## 构建与验证
