@@ -249,18 +249,21 @@ async function resolveFrameAware(page: PwPage, selector?: string, text?: string)
 // ── Structural config helpers ────────────────────────────────────────────
 
 /**
- * Split a save path into its directory and a "stem" (basename minus one final
- * extension). Unlike a bare `lastIndexOf('.')`, an extensionless path keeps its
- * full basename as the stem (e.g. `/tmp/multi-noext` → `{dir:'/tmp/',
- * stem:'multi-noext'}`, NOT `multi-noex`). A leading-dot file (`.hidden`) is
- * treated as extensionless so its name is preserved.
+ * Split a save path into its directory, a "stem" (basename minus one final
+ * extension), and that extension (with the leading dot, e.g. `.jpg`; empty
+ * string when the path is extensionless). Unlike a bare `lastIndexOf('.')`,
+ * an extensionless path keeps its full basename as the stem (e.g.
+ * `/tmp/multi-noext` → `{dir:'/tmp/', stem:'multi-noext', ext:''}`, NOT
+ * `multi-noex`). A leading-dot file (`.hidden`) is treated as extensionless so
+ * its name is preserved.
  */
-export function splitSaveStem(savePath: string): { dir: string; stem: string } {
+export function splitSaveStem(savePath: string): { dir: string; stem: string; ext: string } {
   const dir = savePath.slice(0, Math.max(savePath.lastIndexOf('/'), savePath.lastIndexOf('\\')) + 1)
   const base = savePath.slice(dir.length)
   const dot = base.lastIndexOf('.')
   const stem = dot > 0 ? base.slice(0, dot) : base
-  return { dir, stem }
+  const ext = dot > 0 ? base.slice(dot) : ''
+  return { dir, stem, ext }
 }
 
 /** JPEG quality staircase steps (descending), never going above `base`, floor at 40. */
@@ -1061,7 +1064,6 @@ export class BrowserSession {
    */
   async saveScreenshots(buffers: Buffer[], savePath: string, format: string): Promise<{ savedPath: string; savedPaths: string[] }> {
     if (!buffers.length) throw new BrowserToolError('browser-error', t('error.browser', this.lang, { message: 'no screenshot buffers to save' }))
-    const ext = format === 'png' ? 'png' : 'jpg'
     const outDir = savePath.slice(0, Math.max(savePath.lastIndexOf('/'), savePath.lastIndexOf('\\')) + 1)
     if (outDir && !existsSync(outDir)) mkdirSync(outDir, { recursive: true })
     const saved: string[] = []
@@ -1072,9 +1074,12 @@ export class BrowserSession {
     // Multiple tiles: write `name-1.ext`, `name-2.ext`, ... beside `savePath`.
     // Use the shared `splitSaveStem` so an extensionless path keeps its stem
     // intact (e.g. `/tmp/multi-noext` → `multi-noext-1.png`, NOT `multi-noex-1.png`).
-    const { dir, stem } = splitSaveStem(savePath)
+    // If the caller's `savePath` carries an extension, honor it; otherwise fall
+    // back to the config format's extension.
+    const { dir, stem, ext } = splitSaveStem(savePath)
+    const outExt = ext || (format === 'png' ? '.png' : '.jpg')
     buffers.forEach((buf, i) => {
-      const p = `${dir}${stem}-${i + 1}.${ext}`
+      const p = `${dir}${stem}-${i + 1}${outExt}`
       writeFileSync(p, buf)
       saved.push(p)
     })

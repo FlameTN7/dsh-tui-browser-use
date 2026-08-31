@@ -19,7 +19,7 @@ All tools live in the `browser_*` namespace and return a unified envelope
 | Tool | Purpose | Key params |
 |---|---|---|
 | `browser_navigate` | Go to a URL | `url` |
-| `browser_screenshot` | Capture + understand the page. Result reports `oversizeTiles` when some captured tiles still exceed the byte budget | `instruction?` / `savePath?` |
+| `browser_screenshot` | Capture + understand the page. Result reports `oversizeTiles` when some captured tiles still exceed the byte budget. `savePath` writes to disk: a single capture goes to `savePath` verbatim; tiled captures write `stem-N.ext` beside it (the extension honors `savePath` first, then falls back to `screenshot.format`) | `instruction?` / `savePath?` |
 | `browser_click` | Click by selector or visible text | `selector?` / `text?` |
 | `browser_type` | Fill an input | `selector`, `text` |
 | `browser_evaluate` | Run JS in the page | `expression` |

@@ -9,36 +9,33 @@
 ## Features
 
 - **21 tools**: browsing, interaction, observation, structured extraction, natural-language multi-step tasks, file download, and more.
-- **Vision**: DeepSeek Files API (official) or OpenAI-compatible base64 transfer; automatic scroll-capture for tall pages, column splitting for wide pages, truncation reporting. (The super-assembly tiling is tuned for the strict compression constraints of DeepSeek's official vision backend — a deliberate token-for-accuracy trade-off.)
+- **Super-assembly tiling**: tuned for the strict compression of DeepSeek's official vision backend; tall or wide pages are automatically captured in scroll segments / column splits with truncation reporting, keeping recognition accuracy high.
 - **Session**: session-profile & login-state management (`session.mode` persistent / isolated, lock file for concurrency, conflict auto-degrades to a fresh ephemeral profile, whole directory is packable/migratable), dialog policy, serialized mutex, navigation/action/settle timeouts.
-- **File interaction**: `browser_screenshot.savePath` writes screenshots to disk; `browser_download` downloads files with the session's cookies.
-- **Secure defaults**: vision prompt-injection fencing (`<task>` delimiters, screenshots treated as untrusted content), URL/sensitive-query/cookie redaction, sandbox flags gated by need.
-- **Three engines**: chromium (default) / firefox / webkit; config editable in the dsh-tui `/settings` panel.
+- **Security**: vision prompt-injection fencing (`<task>` delimiters, screenshots treated as untrusted content), URL/sensitive-query/cookie redaction, sandbox flags gated by need.
+- **Browser engines**: chromium (bundled, cross-platform) / firefox / webkit; config editable in the dsh-tui `/settings` panel.
 
 ## Architecture
 
 ```
-┌────────────────────────────────────────────────────────┐
-│        dsh --profile dsh-tui (Cordis composition)        │
-│                                                          │
-│  dsh-tui-browser-use (this plugin)                       │
-│    ├── src/index.ts             plugin entry + config/public exports │
-│    ├── src/tools/registry.ts    registers browser_* tools (per-tool dispose) │
-│    ├── src/browser.ts           Playwright browser session manager│
-│    │     └─ driver/             BrowserDriver + PlaywrightDriver │
-│    ├── src/vision/              VisionAdapter dual transports │
-│    │     ├─ deepseek-file-adapter (Files API native)    │
-│    │     └─ openai-compat-adapter (base64 inline)       │
-│    ├── src/session-profiles.ts  session profiles/lock/storage-state atomic write │
-│    ├── src/runtime-env.ts       centralized DSH_TUI_* env injection │
-│    ├── src/capabilities.ts      provider capability detection │
-│    ├── src/image-pipeline.ts    capture-compress/size-check/tiling-det. │
-│    ├── src/i18n.ts              bilingual UI dictionary  │
-│    └── src/settings-section.ts  registers /settings block │
-└────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│        dsh --profile dsh-tui (Cordis composition)              
+│                                                          
+│  dsh-tui-browser-use (this plugin)                            
+│    ├── src/index.ts             plugin entry + config/public exports    
+│    ├── src/tools/registry.ts    registers browser_* tools (per-tool dispose)
+│    ├── src/browser.ts          Playwright browser session manager   
+│    │     └─ driver/            BrowserDriver + PlaywrightDriver 
+│    ├── src/vision/             VisionAdapter dual transports        
+│    │     ├─ deepseek-file-adapter (Files API native)       
+│    │     └─ openai-compat-adapter (base64 inline)          
+│    ├── src/session-profiles.ts session profiles/lock/storage-state atomic write     
+│    ├── src/runtime-env.ts      centralized DSH_TUI_* env injection 
+│    ├── src/capabilities.ts     provider capability detection          
+│    ├── src/image-pipeline.ts   capture-compress/size-check/tiling-det. 
+│    ├── src/i18n.ts             bilingual UI dictionary               
+│    └── src/settings-section.ts registers /settings block     
+└──────────────────────────────────────────────────────────────────┘
 ```
-
-Tall pages are captured by `BrowserSession.captureSegments()` as multiple native-resolution viewport images at `viewport height − overlap`; wide pages are split into columns at `viewport width − overlap`. Results expose `tilesTruncated` and related metadata when the page needs more than `tiling.maxTiles` segments.
 
 ## Tools
 
@@ -46,7 +43,7 @@ Tall pages are captured by `BrowserSession.captureSegments()` as multiple native
 |---|---|---|
 | Navigation | `browser_navigate` / `back` / `forward` / `reload` | Returns title + URL + status |
 | Interaction | `browser_click` / `type` / `hover` / `press` / `scroll` / `wait` | `text=`/`role=`/`label=`/CSS locators; `type` supports `clear` + `enter` |
-| Observation | `browser_screenshot` / `snapshot` / `evaluate` | Screenshot + vision (`oversizeTiles` reports tiles still over the byte budget); indexed DOM snapshot (nodes carry a cross-call stable `id`; optional `delta` returns incremental changes); in-page JS evaluation |
+| Observation | `browser_screenshot` / `snapshot` / `evaluate` | Screenshot + vision (`oversizeTiles` reports tiles still over the byte budget; `savePath` writes tiles to disk); indexed DOM snapshot (nodes carry a cross-call stable `id`; optional `delta` returns incremental changes); in-page JS evaluation |
 | Extraction/tasks | `browser_extract` / `task` | Schema validation with ≤2 retries; natural-language multi-step loop with cumulative cost |
 | Session | `browser_cookies` / `console_messages` / `network_requests` / `pdf` / `download` / `status` | Cookie values masked by default (`readValues` opt-in); console/network capture; PDF/download; `browser_status` also reports the effective session profile (`value.session`: mode/profile/sanitized profileDir/degraded) |
 
@@ -69,15 +66,11 @@ Mount it in the dsh-tui profile's `cordis.patch.yml`:
         visionMode: 'auto'
 ```
 
-The `postinstall` hook detects a system Chrome or Playwright Chromium and prints a copyable install command when missing; you can also point `DSH_TUI_BROWSER_EXECUTABLE` at an existing Chromium. When no browser is available, tools return `browser-error` with a fix hint instead of failing silently.
-
-### Vision API key (optional, recommended)
-
-With `visionMode: auto`, the default route is official DeepSeek vision; keys resolve through the dsh-tui `credentials.resolve({env})` seam (which can reference profile `.credentials.yaml`). Only hosts WITHOUT a credentials service (stub/third-party hosts) fall back to `DEEPSEEK_API_KEY` / `OPENAI_API_KEY` env vars. To use another OpenAI-compatible vision endpoint, override `DSH_TUI_BROWSER_PROVIDER` / `DSH_TUI_BROWSER_MODEL` / `DSH_TUI_BROWSER_BASE_URL` and resolve the key for that endpoint (e.g. `OPENAI_API_KEY`). `DEEPSEEK_BASE_URL` only applies to the DeepSeek route. When no vision-capable model is available, `browser_screenshot` returns `visionUsed:false` + `visionUnavailableReason`; DOM observation stays available through `browser_snapshot` and browser tools keep working.
+The `postinstall` hook detects a system Chrome or Playwright Chromium and prints a copyable install command when missing; you can also point `DSH_TUI_BROWSER_EXECUTABLE` at an existing Chromium.
 
 ### Session profile modes (optional)
 
-The `session` config block manages the browser login-state profiles (Phase 3, competitor B5/B6):
+The `session` config block manages browser login-state profiles:
 
 ```yaml
 config:
@@ -89,52 +82,29 @@ config:
 
 - Layout under the profile root: `profiles/<name>/user-data` (cookies/login state), `states/<name>.storage-state.json` (atomic write, chmod 0600), `ephemeral/<run-id>/` (isolated temp profile, cleaned on close).
 - The profile root is a cross-platform cache dir: Linux `$XDG_CACHE_HOME` (default `~/.cache`) → macOS `~/Library/Caches` → Windows `%LOCALAPPDATA%`, under `dsh-tui-browser-use`.
-- Concurrency: `persistent` takes an `O_EXCL` atomic lock at startup; if the same named profile is locked by another session, the plugin auto-degrades to a fresh `isolated` temp profile (`browser_status` reports `degraded:true`) — it never hangs.
 - Packable/migratable: copy `profiles/<name>/` to another machine/path, point `session.profile` at it, and the login state follows the profile.
-- `browser_status`'s `value.session` reflects the runtime-effective sanitized profile info; `config.session` is present only when a `session` block was configured. `session.mode` changes need a restart to take effect.
-
-### Common environment variables
-
-Some of these are also exposed in the TUI Settings screen for quick adjustment.
-
-| Variable | Effect |
-|---|---|
-| `DSH_TUI_BROWSER_ENGINE` | Browser engine: `chromium` (default) / `firefox` / `webkit` |
-| `DSH_TUI_BROWSER_EXECUTABLE` | Point at an existing Chromium binary |
-| `DSH_TUI_BROWSER_PROVIDER` / `_MODEL` / `_BASE_URL` | Override vision provider / model / endpoint |
-| `DEEPSEEK_BASE_URL` | DeepSeek official endpoint override (applies to the DeepSeek route only, never to other providers) |
-| `DSH_TUI_BROWSER_PROXY` | HTTP proxy for the browser; `DSH_TUI_BROWSER_PROXY_BYPASS` overrides the loopback bypass list |
-| `DSH_TUI_BROWSER_USER_DATA_DIR` / `_STORAGE_STATE` | Persist login state / export-import a storageState snapshot (a malformed snapshot falls back to a fresh session instead of blocking startup). Takes precedence over `session.mode` (env is external to the plugin-managed profiles) |
-| `DSH_TUI_BROWSER_DIALOG` | Dialog policy: `dismiss` (default) / `accept` / `ignore` |
-| `DSH_TUI_BROWSER_TIMEOUT_NAVIGATION` / `_ACTION` / `_SETTLE` | Timeouts in ms (defaults 45000 / 12000 / 6000; 0/negative falls back to the default — never infinite) |
-| `DSH_TUI_BROWSER_MAX_TILES` | Max scroll-capture segments (default 24; 0/negative falls back to the default) |
 
 ### Settings panel
 
-The browser-use section in `/settings` (12 fields) exposes: `visionMode`, `viewport.width/height`, `screenshot.format/quality`, `tiling.mode/threshold/overlap/maxTiles`, `session.mode/profile`, `proxy`. `lang` and `providers[]` have no UI yet — configure them via `cordis.patch.yml` / environment variables. Session-mode changes (persistent/isolated) need a restart to take effect (same as `proxy`).
+The plugin registers a `browser-use` namespace in dsh-tui; common settings are visible in `/settings`, and some changes need a session restart to take effect.
 
 ## Vision pipeline (brief)
 
 ```
 Playwright screenshot
   → capture-time JPEG compression (quality staircase 80→60→40, drop on budget).
-    Pipeline size/byte validation; no pixel-level scaling.
+    Pipeline size/byte validation.
   → exceeds tiling.threshold? → scroll-capture (native-res images, wide pages split into columns)
   → DeepSeek Files API → file_id reference (content-hash reuse before expiry, prompt-cache friendly)
   → OpenAI-compatible endpoint → base64 inline
-  → no vision model → short-circuit (visionUsed:false + visionUnavailableReason)
 ```
-
-- **Files API**: with an official DeepSeek vision model, screenshots are uploaded once and referenced many times; request bodies do not grow with base64 and cache hits are easier to achieve. Uploads expire after 24h by default (`DSH_TUI_BROWSER_FILE_EXPIRES_SECONDS`); identical screenshots reuse one file_id only until shortly before expiry (the cache invalidates ~10s early and re-uploads).
-- **Reliability**: vision requests retry 429/5xx with exponential backoff; `browser_extract` retries parse/schema failures ≤2 times with the violation list attached.
-- **Prompt-injection defense**: vision instructions are fenced with `<task>…</task>` and the system message declares screenshots untrusted page content — instructions inside a page are data, never directives.
 
 ## Build & verify
 
 ```sh
 npm run build           # tsc → lib/types/
 npm run check           # CI gate: build + smoke(21 tools) + manifest + i18n + router
-npm run test:logic      # 18 pure-logic regression suites (no browser/key; incl. session profiles / start-failure lock release / snapshot delta / driver contract / secret probe / runtime env)
+npm run test:logic      # 18 pure-logic regression suites (no browser/key)
 npm run test:container  # stub harness loads the artifact + real browser boot (21 tools)
 npm run test:integration # live browser integration (navigate/click/type/screenshot/tiling/snapshot)
 npm run test:storage-state # storageState corruption fallback + persistent import (live browser)
@@ -142,28 +112,17 @@ npm run test:storage-state # storageState corruption fallback + persistent impor
 
 ## Programmatic use / extension points
 
-The plugin exposes a small programming surface so a host or third party can
-drive the browser or swap a backend without touching the tool registries.
+The plugin exposes a small programming surface so a host or third party can drive the browser or swap a backend without touching the tool registries.
 
-- **Browser backend**: `BrowserSession` is constructed with a `BrowserDriver`
-  (default `PlaywrightDriver`). Inject your own driver (e.g. a stub or a future
-  headless-shell backend) to replace the Playwright implementation. The driver
-  contract lives at `dsh-tui-browser-use/driver`.
-- **Vision transport**: `createVisionAdapter(env, runtimeEnv)` returns the
-  adapter for the resolved image-transfer mode (`file` → DeepSeek Files-API;
-  `base64`/`url` → OpenAI-compatible inline). Swappable at
-  `dsh-tui-browser-use/vision`.
-- **Tool registration**: `buildToolDefinitions(deps)` / `registerTools(ctx, deps)`
-  build and register the 21 `browser_*` tools; the registries accept an injected
-  session + vision resolver, so a host can wrap or extend them.
+- **Browser backend**: `BrowserSession` is constructed with a `BrowserDriver` (default `PlaywrightDriver`). Inject your own driver (e.g. a stub or a future headless-shell backend) to replace the Playwright implementation. The driver contract lives at `dsh-tui-browser-use/driver`.
+- **Vision transport**: `createVisionAdapter(env, runtimeEnv)` returns the adapter for the resolved image-transfer mode (`file` → DeepSeek Files-API; `base64`/`url` → OpenAI-compatible inline). Swappable at `dsh-tui-browser-use/vision`.
+- **Tool registration**: `buildToolDefinitions(deps)` / `registerTools(ctx, deps)` registries accept an injected session + vision resolver, so a host can wrap or extend them.
 
-Subpath exports: `dsh-tui-browser-use/driver`, `dsh-tui-browser-use/vision`,
-`dsh-tui-browser-use/types`. The tool count and the unified result envelope
-(`{ ok, value|error, usage? }`) are part of the contract and must not change.
+Subpath exports: `dsh-tui-browser-use/driver`, `dsh-tui-browser-use/vision`, `dsh-tui-browser-use/types`. The tool count and the unified result envelope (`{ ok, value|error, usage? }`) are part of the contract and must not change.
 
 ## Known limitations
 
-This project is a pure Vibe Coding product: implementation and the full regression suite are verified on headless Linux, and the Phase 5 session-profile acceptance tests were confirmed green by the user on a real dsh-tui setup. macOS remains untested and needs a platform regression when adopted. Feedback — including hard scrutiny — is welcome.
+This project is a pure Vibe Coding product: implementation and the full regression suite are verified on headless Linux. Feedback — including hard scrutiny — is welcome.
 
 ## Docs
 

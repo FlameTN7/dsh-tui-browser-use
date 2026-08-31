@@ -23,25 +23,28 @@ const { splitSaveStem, BrowserSession } = await import('../src/browser.js')
 
 // 1. splitSaveStem — extensionless path keeps its full basename (H-03 no-ext bug).
 {
-  const { dir, stem } = splitSaveStem('/tmp/multi-noext')
+  const { dir, stem, ext } = splitSaveStem('/tmp/multi-noext')
   assert.equal(dir, '/tmp/')
   assert.equal(stem, 'multi-noext')
+  assert.equal(ext, '')
   console.log('[1] splitSaveStem extensionless keeps full stem — OK')
 }
 
-// 2. splitSaveStem — normal extension splits basename.
+// 2. splitSaveStem — normal extension splits basename and reports ext.
 {
-  const { dir, stem } = splitSaveStem('/tmp/shot.jpg')
+  const { dir, stem, ext } = splitSaveStem('/tmp/shot.jpg')
   assert.equal(dir, '/tmp/')
   assert.equal(stem, 'shot')
+  assert.equal(ext, '.jpg')
   console.log('[2] splitSaveStem with extension splits basename — OK')
 }
 
 // 3. splitSaveStem — leading-dot file is extensionless.
 {
-  const { dir, stem } = splitSaveStem('/tmp/.hidden')
+  const { dir, stem, ext } = splitSaveStem('/tmp/.hidden')
   assert.equal(dir, '/tmp/')
   assert.equal(stem, '.hidden')
+  assert.equal(ext, '')
   console.log('[3] splitSaveStem leading-dot file preserved — OK')
 }
 
@@ -73,6 +76,25 @@ const { splitSaveStem, BrowserSession } = await import('../src/browser.js')
     assert.ok(existsSync(join(dir, 'multi-noext-1.png')))
     assert.ok(existsSync(join(dir, 'multi-noext-2.png')))
     console.log('[5] saveScreenshots multi-tile extensionless keeps full stem — OK')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+// 6. Multi-tile with an extension in savePath → the caller's extension wins
+//    over the config format (P2 fix: `/tmp/shot.png` + format jpeg → `shot-1.png`).
+{
+  const dir = mkdtempSync(join(tmpdir(), 'file-interaction-'))
+  try {
+    const session = new BrowserSession({}, 'en')
+    const p = join(dir, 'shot.png')
+    const { savedPath, savedPaths } = await session.saveScreenshots([Buffer.from('a'), Buffer.from('b')], p, 'jpeg')
+    assert.match(savedPath, /shot-1\.png$/, "caller's .png extension honored")
+    assert.equal(savedPaths.length, 2)
+    assert.ok(existsSync(join(dir, 'shot-1.png')))
+    assert.ok(existsSync(join(dir, 'shot-2.png')))
+    assert.ok(!existsSync(join(dir, 'shot-1.jpg')), 'no .jpg override when caller gave .png')
+    console.log('[6] saveScreenshots multi-tile honors caller extension — OK')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
