@@ -53,7 +53,9 @@ export async function analyzeImages(env: VisionEnv, images: PreparedImage[], ins
   // table > model-name fallback). `none` means the provider can't see images,
   // which short-circuits before any transport work (P1-08).
   if (env.imageTransfer === 'none') {
-    throw new Error('vision-unavailable')
+    // Attach `code` so the tool-level `fail()` maps it to the protocol error
+    // `[vision-unavailable]` instead of a generic `[browser-error]`.
+    throw Object.assign(new Error('vision-unavailable'), { code: 'vision-unavailable' })
   }
   try {
     const adapter = createVisionAdapter(env, runtimeEnv ?? loadRuntimeEnv())

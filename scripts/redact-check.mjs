@@ -57,6 +57,19 @@ const { sanitizeUrl, cookieValue } = await import('../src/browser.js')
   console.log('[4] sanitizeUrl strips URL userinfo — OK')
 }
 
+// 4b. Fallback (non-parseable / protocol-relative) path: percent-encoded
+//     query keys cannot bypass redaction, and userinfo is stripped.
+{
+  // Percent-encoded `t` in `token` must still be caught on the fallback path.
+  const out = sanitizeUrl('/x?%74oken=secret&ok=1')
+  assert.equal(out, '/x?%74oken=***&ok=1')
+  // Protocol-relative userinfo must be stripped even without a parseable URL.
+  const out2 = sanitizeUrl('//alice:secretpass@example.com/page?token=x')
+  assert.equal(out2, '//example.com/page?token=***')
+  assert.ok(!out2.includes('secretpass'), 'userinfo must never surface on fallback')
+  console.log('[4b] sanitizeUrl fallback: encoded keys + userinfo — OK')
+}
+
 // 5. Cookie value masking.
 {
   assert.equal(cookieValue('secret', false), '***')

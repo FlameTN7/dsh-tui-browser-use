@@ -333,9 +333,19 @@ export function sanitizeUrl(raw: string, sensitiveKeys: string[] = DEFAULT_SENSI
     return u.toString()
   } catch {
     // Relative href / unparseable: rewrite each `?name=value` pair by hand,
-    // honouring the caller-configured sensitive key list.
-    return raw.replace(/([?&])([^=&#]+)=([^&#]*)/g, (match, sep: string, name: string) =>
-      isSensitive(name) ? `${sep}${name}=***` : match)
+    // honouring the caller-configured sensitive key list. Also strip any
+    // `//user:pass@` userinfo (Basic-Auth credentials) before query rewriting,
+    // and decode percent-encoded query names so `%74oken` cannot bypass.
+    let out = raw
+    // Clear `//user:pass@` userinfo in protocol-relative hrefs (`new URL()`
+    // throws without a base, so the fallback would otherwise leak credentials).
+    // The regex requires `//` so a scheme like `mailto:user@host` is untouched.
+    out = out.replace(/^\/\/([^/@?#]+)@/, '//')
+    const isSensitiveDecoded = (name: string): boolean => {
+      try { return isSensitive(decodeURIComponent(name)) } catch { return isSensitive(name) }
+    }
+    return out.replace(/([?&])([^=&#]+)=([^&#]*)/g, (match, sep: string, name: string) =>
+      isSensitiveDecoded(name) ? `${sep}${name}=***` : match)
   }
 }
 

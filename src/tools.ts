@@ -114,7 +114,10 @@ function fail(err: unknown): ResultEnvelope<never> {
     return { ok: false, error: { code, message } }
   }
   const msg = err instanceof Error ? err.message : String(err)
-  return { ok: false, error: { code: 'browser-error', message: sanitizeMessage(msg) } }
+  // Defense-in-depth: recognize the canonical vision-unavailable message even
+  // if the thrower forgot to attach `code` (P1-08 / §6 error-code contract).
+  const code: ErrorCode = msg === 'vision-unavailable' ? 'vision-unavailable' : 'browser-error'
+  return { ok: false, error: { code, message: sanitizeMessage(msg) } }
 }
 
 // Cap the rendered success text so a huge page value (e.g. a 50k-char evaluate
