@@ -1,15 +1,13 @@
 /**
  * dsh-tui-browser-use — tool definition builder.
  *
- * Builds the 8 `browser.*` tool definitions and registers them on the harness
- * `ctx.tools` service (structural typed). Every tool returns the unified
- * result envelope (proposal §4). Browser failures are returned as structured
+ * Builds the 21 `browser_*` tool definitions for the harness `ctx.tools`
+ * service (structural typed). Every tool returns the unified result envelope
+ * (proposal §4). Browser failures are returned as structured
  * `{ ok: false, error }` envelopes rather than thrown, so the model always
- * sees the wire contract.
- *
- * Round 1 implements navigate/screenshot/click/type/evaluate/status.
- * `browser.extract` and `browser.task` are present but return
- * `not-implemented` until their later rounds.
+ * sees the wire contract. Tool descriptions/parameter docs are the ENGLISH
+ * model-facing contract (explicitly exempted from the bilingual UI dictionary
+ * by AGENTS.md §9); every human-facing string lives in `src/i18n.ts`.
  */
 
 import type { BrowserSession } from './browser.js'
@@ -221,6 +219,8 @@ interface PreparedCapture {
   captured: number
   capturedHeight: number
   pageHeight: number
+  /** Number of prepared images still over the byte budget (PNG never re-encodes). */
+  oversizeTiles: number
   /** Raw captured buffers (pre-prepare), for a `savePath` hand-off. */
   buffers: Buffer[]
 }
@@ -249,6 +249,7 @@ async function capturePreparedImages(session: BrowserSession, lang: Lang, maxIma
       maxWidth: Number.isFinite(w) ? w : 1280,
       maxHeight: Number.isFinite(h) ? h : 720,
       tiling: 'off',
+      ...(maxImageBytes !== undefined ? { maxImageBytes } : {}),
     })
     if (total > 1 && img) img.tile = { index: i + 1, total }
     return img
@@ -271,6 +272,7 @@ async function capturePreparedImages(session: BrowserSession, lang: Lang, maxIma
     captured: cap.captured,
     capturedHeight: cap.capturedHeight,
     pageHeight: cap.pageHeight,
+    oversizeTiles: images.filter((img) => img.oversize === true).length,
     buffers: cap.buffers,
   }
 }
@@ -305,7 +307,10 @@ export async function extractWithRetry(
     const res = await call(instruction)
     const data = parseJsonReply(res.insight)
     if (data === undefined) {
-      lastErr = `vision model did not return parseable JSON; raw: ${res.insight.slice(0, 120)}`
+      // Do NOT echo the model's raw reply into the next instruction: it is
+      // page-derived content and could smuggle prompt-injection text past the
+      // <task> fence. Only the schema-level problem is fed back.
+      lastErr = 'vision model did not return parseable JSON'
       continue
     }
     const violations = validateJsonSchema(schema, data)
@@ -315,7 +320,7 @@ export async function extractWithRetry(
     }
     return { data, usage: res.usage, attempts: attempt }
   }
-  throw new Error(lastErr)
+  throw Object.assign(new Error(lastErr), { code: 'schema-validation-failed' })
 }
 
 
@@ -386,12 +391,15 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
           }
 
           const cap = await capturePreparedImages(session, lang, env?.maxImageBytes)
+          // One signal for the WHOLE call: with no harness signal this is a
+          // single wall-clock budget, not a fresh budget per vision attempt.
+          const signal = abortSignalOf(exec, 60_000)
           let insight = ''
           let fileId = ''
           if (visionActive && cap.images.length > 0) {
             const { analyzeImages } = await import('./vision.js')
             const instruction = [p.instruction, cap.tilingNote].filter(Boolean).join(' ')
-            const res = await analyzeImages(env, cap.images, instruction || undefined, abortSignalOf(exec, 60_000), deps.runtimeEnv)
+            const res = await analyzeImages(env, cap.images, instruction || undefined, signal, deps.runtimeEnv)
             insight = res.insight || t('screenshot.insight.empty', lang)
             fileId = cap.images[0]?.fileId ?? ''
           }
@@ -419,6 +427,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
             tilesTruncated: cap.truncated,
             capturedHeight: cap.capturedHeight,
             pageHeight: cap.pageHeight,
+            oversizeTiles: cap.oversizeTiles,
             savedPath,
             savedPaths,
           })
@@ -498,9 +507,12 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         try {
           if (!p.schema || typeof p.schema !== 'object') return fail(t('error.argument', lang, { message: 'schema (JSON Schema) is required' }))
           const env = await visionEnvOrNull(deps)
-          if (!env) return fail(t('error.vision-unavailable', lang))
+          if (!env) return fail({ code: 'vision-unavailable', message: t('error.vision-unavailable', lang) })
           const cap = await capturePreparedImages(session, lang, env?.maxImageBytes)
           const { analyzeImages } = await import('./vision.js')
+          // One signal for the whole call (retries included), so the declared
+          // 60s `timeoutMs` is a wall-clock ceiling, not a per-attempt budget.
+          const signal = abortSignalOf(exec, 60_000)
 
           // The schema contract is asserted on every attempt so the model never
           // drifts into prose even when a caller supplies a bare instruction.
@@ -511,13 +523,19 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
 
           try {
             const { data, usage } = await extractWithRetry(
-              (callInstruction) => analyzeImages(env, cap.images, callInstruction, abortSignalOf(exec, 60_000), deps.runtimeEnv),
+              (callInstruction) => analyzeImages(env, cap.images, callInstruction, signal, deps.runtimeEnv),
               p.schema as SchemaNode,
               instruction,
             )
             return ok({ data }, usage)
           } catch (retryErr) {
-            return fail(t('error.schema-validation', lang, { message: retryErr instanceof Error ? retryErr.message : String(retryErr) }))
+            // Only retry-exhaustion carries the schema code; a transport failure
+            // is a browser-level error, not a schema mismatch.
+            const code = (retryErr as { code?: string } | null)?.code === 'schema-validation-failed'
+              ? 'schema-validation-failed'
+              : 'browser-error'
+            const key = code === 'schema-validation-failed' ? 'error.schema-validation' : 'error.browser'
+            return fail({ code, message: t(key, lang, { message: retryErr instanceof Error ? retryErr.message : String(retryErr) }) })
           }
         } catch (err) { return fail(err) }
       },
@@ -538,7 +556,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         try {
           if (!p.instruction) return fail(t('error.argument', lang, { message: 'instruction is required' }))
           const env = await visionEnvOrNull(deps)
-          if (!env) return fail(t('error.vision-unavailable', lang))
+          if (!env) return fail({ code: 'vision-unavailable', message: t('error.vision-unavailable', lang) })
           const maxSteps = Math.min(Math.max(Number(p.maxSteps) || 8, 1), 16)
           const start = Date.now()
           let steps = 0
@@ -548,6 +566,9 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
           let consecutiveFailures = 0
           const maxFailures = 4
           const budget = Math.max(1, Math.round(maxSteps * 0.75))
+          // One signal for the whole task loop: the declared 120s `timeoutMs`
+          // is a wall-clock ceiling for ALL steps, not a per-step budget.
+          const signal = abortSignalOf(exec, 120_000)
           const { analyzeImages } = await import('./vision.js')
           while (steps < maxSteps && !done && consecutiveFailures < maxFailures) {
             steps += 1
@@ -559,7 +580,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
               ? ` You have used about ${steps}/${maxSteps} steps. Finish now with {"action":"done","answer":"..."} — prefer a partial result over exhausting the budget.`
               : ''
             const res = await analyzeImages(env, cap.images,
-              `You are a browser automation agent. Task: ${p.instruction}. Look at the current screenshot and choose the NEXT single action that advances the task. Reply ONLY with a JSON object, one of: {"action":"click","selector":"..."}, {"action":"type","selector":"...","text":"..."}, {"action":"navigate","url":"..."}, {"action":"scroll","x":0,"y":300}, {"action":"press","key":"Enter"}, {"action":"wait","ms":500}, {"action":"hover","selector":"..."}, or {"action":"done","answer":"..."}. Prefer visible text selectors. Do not wrap in markdown.${budgetNote}${cap.tilingNote ? ` ${cap.tilingNote}` : ''}`, abortSignalOf(exec, 120_000), deps.runtimeEnv)
+              `You are a browser automation agent. Task: ${p.instruction}. Look at the current screenshot and choose the NEXT single action that advances the task. Reply ONLY with a JSON object, one of: {"action":"click","selector":"..."}, {"action":"type","selector":"...","text":"..."}, {"action":"navigate","url":"..."}, {"action":"scroll","x":0,"y":300}, {"action":"press","key":"Enter"}, {"action":"wait","ms":500}, {"action":"hover","selector":"..."}, or {"action":"done","answer":"..."}. Prefer visible text selectors. Do not wrap in markdown.${budgetNote}${cap.tilingNote ? ` ${cap.tilingNote}` : ''}`, signal, deps.runtimeEnv)
             cost = accumulateUsage(cost, res.usage)
             const action = parseJsonReply(res.insight) as { action?: string; selector?: string; text?: string; url?: string; key?: string; x?: number; y?: number; ms?: number; answer?: string } | undefined
             if (!action?.action) { answer = 'Could not interpret the page.'; done = true; break }

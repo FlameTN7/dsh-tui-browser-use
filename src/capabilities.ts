@@ -24,7 +24,7 @@ import type { BrowserUseConfig, ImageTransfer, ProviderCapability, ProviderOverr
  * `gemini-3.1-pro`) be detected correctly, while a text-only model on the same
  * route (e.g. `deepseek-v4-flash`) still short-circuits to DOM.
  */
-const BUILTIN: Record<string, { imageTransfer: ImageTransfer; detail: 'high' | 'low'; visionFor: (model: string) => boolean }> = {
+const BUILTIN: Record<string, { imageTransfer: ImageTransfer; detail: 'high'; visionFor: (model: string) => boolean }> = {
   // Official DeepSeek: images ride the Files API. Only the vision/glyph-capable
   // DeepSeek models accept images; a text-only model MUST short-circuit to DOM
   // (AGENTS.md §6).
@@ -127,7 +127,9 @@ export function detectCapability(
       supportsVision: override.supportsVision,
       imageTransfer: override.imageTransfer,
       ...(override.maxImageBytes !== undefined ? { maxImageBytes: override.maxImageBytes } : {}),
-      detail: override.detailPreference === 'low' ? 'low' : 'high',
+      // `low` is prohibited for page screenshots (proposal §5.5); the schema no
+      // longer accepts it and every adapter pins `detail:'high'`.
+      detail: 'high',
     }
   }
 

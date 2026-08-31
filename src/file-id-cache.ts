@@ -24,8 +24,14 @@ export function fileIdScopeKey(baseUrl: string, provider: string, model: string,
   return createHash('sha256').update(`${baseUrl}|${provider}|${model}|${keyFp}`).digest('hex')
 }
 
+interface CacheEntry {
+  fileId: string
+  /** Epoch ms after which the provider-side file may be expired (0 = permanent). */
+  expiresAt: number
+}
+
 interface ScopeEntry {
-  map: Map<string, string> // contentHash → file_id
+  map: Map<string, CacheEntry> // contentHash → entry
   lastUsed: number
 }
 
@@ -38,27 +44,35 @@ const MAX_SCOPES = 8
  * A bounded, scope-aware file_id cache. Per-scope it caps at `MAX_PER_SCOPE`
  * (LRU by insertion order); globally it caps at `MAX_SCOPES` scopes (LRU by
  * last use), so switching between many endpoints/accounts never grows unbounded.
+ * Entries also carry the provider-side expiry: a file uploaded with
+ * `expires_after` (default 24h) must NOT be reused once it may be gone.
  */
 export class FileIdCache {
   private scopes = new Map<string, ScopeEntry>()
   private tick = 0
 
-  /** Look up a cached file_id for a scope + content hash. */
+  /** Look up a live cached file_id for a scope + content hash. */
   get(scopeKey: string, contentHash: string): string | undefined {
     const sc = this.scopes.get(scopeKey)
     if (!sc) return undefined
     sc.lastUsed = ++this.tick
-    return sc.map.get(contentHash)
+    const entry = sc.map.get(contentHash)
+    if (!entry) return undefined
+    if (entry.expiresAt > 0 && entry.expiresAt <= Date.now()) {
+      sc.map.delete(contentHash)
+      return undefined
+    }
+    return entry.fileId
   }
 
   /** Store a file_id for a scope + content hash, evicting as needed. */
-  set(scopeKey: string, contentHash: string, fileId: string): void {
+  set(scopeKey: string, contentHash: string, fileId: string, ttlMs = 0): void {
     let sc = this.scopes.get(scopeKey)
     if (!sc) {
       sc = { map: new Map(), lastUsed: ++this.tick }
       this.scopes.set(scopeKey, sc)
     }
-    sc.map.set(contentHash, fileId)
+    sc.map.set(contentHash, { fileId, expiresAt: ttlMs > 0 ? Date.now() + ttlMs : 0 })
     sc.lastUsed = ++this.tick
 
     // Per-scope cap: drop the insertion-oldest entry.

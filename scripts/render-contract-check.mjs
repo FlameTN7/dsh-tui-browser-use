@@ -18,6 +18,8 @@ const { renderText, renderUntrusted } = await import('../src/tools.js')
 {
   const out = renderText({}, { ok: false, error: { code: 'schema-validation-failed', message: 'bad' } })
   assert.match(out[0].text, /^\[schema-validation-failed\] bad/)
+  const out2 = renderText({}, { ok: false, error: { code: 'vision-unavailable', message: 'no vision' } })
+  assert.match(out2[0].text, /^\[vision-unavailable\] no vision/)
   console.log('[1] failure render: [code] message — OK')
 }
 

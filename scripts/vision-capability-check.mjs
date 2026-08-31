@@ -47,12 +47,13 @@ const { detectCapability, isVisionCapableModel } = await import('../src/capabili
   console.log('[4] provider override wins in both directions — OK')
 }
 
-// 5. Override transfer/detail are honoured; imageTransfer follows capability.
+// 5. Override transfer is honoured; detail is ALWAYS high (proposal §5.5
+//    prohibits `low` for page screenshots — the schema rejects it).
 {
-  const cap = detectCapability('openai', 'gpt-5', [{ provider: 'openai', supportsVision: true, imageTransfer: 'url', detailPreference: 'low' }])
+  const cap = detectCapability('openai', 'gpt-5', [{ provider: 'openai', supportsVision: true, imageTransfer: 'url', detailPreference: 'auto' }])
   assert.equal(cap.imageTransfer, 'url', 'override imageTransfer honoured')
-  assert.equal(cap.detail, 'low', 'override detailPreference honoured')
-  console.log('[5] override imageTransfer + detail honoured — OK')
+  assert.equal(cap.detail, 'high', 'detail is pinned high regardless of preference')
+  console.log('[5] override imageTransfer honoured + detail pinned high — OK')
 }
 
 // 6. isVisionCapableModel remains a pure name-only helper (not the runtime path).

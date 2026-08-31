@@ -96,26 +96,39 @@ export function validateJsonSchema(schema: SchemaNode, value: unknown, path = '$
   return violations
 }
 
-/** Heuristically parse a JSON object out of a vision-model text reply. */
+/** Heuristically parse a JSON object/array out of a vision-model text reply. */
 export function parseJsonReply(text: string): unknown {
   const trimmed = text.trim()
   // Strip markdown fences (` ```json ... ``` `) and surrounding prose.
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)
   const candidate = fenced ? fenced[1]!.trim() : trimmed
-  // If the whole reply is JSON, parse directly. Otherwise find the first
-  // balanced {...} block (forward-scan for a `{` and try increasing depths).
+  // If the whole reply is JSON, parse directly.
   try {
     return JSON.parse(candidate)
   } catch {
-    // fall through to brace-scan
+    // fall through to bracket-scan
   }
-  const start = candidate.indexOf('{')
+  // Otherwise find the first balanced {...} or [...] block, ignoring braces
+  // that appear inside JSON strings (a page value like {"x":"}"} must not
+  // terminate the scan early).
+  const start = candidate.search(/[\[{]/)
   if (start < 0) return undefined
+  const open = candidate[start]!
+  const close = open === '{' ? '}' : ']'
   let depth = 0
+  let inString = false
+  let escaped = false
   for (let i = start; i < candidate.length; i += 1) {
-    const ch = candidate[i]
-    if (ch === '{') depth += 1
-    else if (ch === '}') {
+    const ch = candidate[i]!
+    if (inString) {
+      if (escaped) escaped = false
+      else if (ch === '\\') escaped = true
+      else if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') { inString = true; continue }
+    if (ch === open) depth += 1
+    else if (ch === close) {
       depth -= 1
       if (depth === 0) {
         const slice = candidate.slice(start, i + 1)

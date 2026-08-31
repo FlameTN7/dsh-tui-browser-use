@@ -1,10 +1,10 @@
 /**
  * dsh-tui-browser-use — shared types and protocol contracts.
  *
- * The plugin exposes a versioned browser-tool family (`browser.dsh-tui/v1alpha1`)
- * to the agent. Every tool returns a unified result envelope (§4 of the
- * proposal). This module owns the type-level shape; runtime behavior lives in
- * the sibling modules (browser, capabilities, image-pipeline, vision, tools).
+ * The plugin exposes the versioned `browser_*` tool family to the agent. Every
+ * tool returns a unified result envelope (§4 of the proposal). This module owns
+ * the type-level shape; runtime behavior lives in the sibling modules (browser,
+ * capabilities, image-pipeline, vision, tools).
  */
 
 // ── Result envelope ──────────────────────────────────────────────────────
@@ -95,8 +95,8 @@ export interface ProviderOverride {
   imageTransfer: ImageTransfer
   /** Optional maximum image payload size in bytes. */
   maxImageBytes?: number
-  /** Preferred detail level; `auto` defers to the pipeline default (high). */
-  detailPreference?: 'high' | 'low' | 'auto'
+  /** Preferred detail level; `auto` defers to the pipeline default (high). `low` is prohibited for screenshots. */
+  detailPreference?: 'high' | 'auto'
 }
 
 /** Screenshot configuration block. */
@@ -177,6 +177,8 @@ export interface ScreenshotResult {
   capturedHeight?: number
   /** Full scrollable page height in px. */
   pageHeight?: number
+  /** Number of captured tiles still over the byte budget after capture-time compression. */
+  oversizeTiles?: number
   /** Absolute path the screenshot was written to when `savePath` was provided (first/only tile). */
   savedPath?: string
   /** All tile paths written when `savePath` was provided and the page tiled into multiple files. */
@@ -533,7 +535,8 @@ export interface ProviderCapability {
   supportsVision: boolean
   imageTransfer: ImageTransfer
   maxImageBytes?: number
-  detail: 'high' | 'low'
+  /** Always `high` for page screenshots (proposal §5.5 prohibits `low`). */
+  detail: 'high'
 }
 
 // ── i18n ─────────────────────────────────────────────────────────────────

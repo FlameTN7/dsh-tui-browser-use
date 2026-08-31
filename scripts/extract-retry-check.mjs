@@ -65,16 +65,16 @@ function makeCall(responses, seen) {
   console.log('[3] schema-violate→valid pass: attempts=2, retry carries violation list')
 }
 
-// 4. all attempts fail → throws with last error
+// 4. all attempts fail → throws with last error and the schema-validation code
 {
   const seen = []
   const fn = makeCall(['prose 1', 'prose 2', 'prose 3'], seen)
   await assert.rejects(
     () => extractWithRetry(fn, schema, 'BASE'),
-    (err) => /did not return parseable JSON/.test(err.message),
+    (err) => /did not return parseable JSON/.test(err.message) && err.code === 'schema-validation-failed',
   )
   assert.equal(seen.length, 3)
-  console.log('[4] all-fail pass: throws after 3 calls, last error surfaced')
+  console.log('[4] all-fail pass: throws after 3 calls with schema-validation-failed code')
 }
 
 // 5. Sanity: validateJsonSchema still agrees with the helper (schema path)
@@ -84,6 +84,15 @@ function makeCall(responses, seen) {
   const bad = validateJsonSchema(schema, { heading: 'Hi', bogus: 1 })
   assert.ok(bad.some((v) => v.includes('additional property not allowed')))
   console.log('[5] validateJsonSchema sanity pass')
+}
+
+// 6. parseJsonReply: braces inside JSON strings do not end the scan; top-level
+//    arrays are parseable when wrapped in prose.
+{
+  const { parseJsonReply } = await import('../src/schema-validate.js')
+  assert.deepEqual(parseJsonReply('Result: {"x":"}","y":1} done'), { x: '}', y: 1 })
+  assert.deepEqual(parseJsonReply('Result: [1,2,{"a":"["}] done'), [1, 2, { a: '[' }])
+  console.log('[6] parseJsonReply string-brace + top-level array pass')
 }
 
 console.log('\n[extract-retry-check] ALL PASS')

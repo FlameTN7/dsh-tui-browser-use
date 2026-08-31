@@ -23,6 +23,7 @@ import { registerSettingsSection } from './settings-section.js'
 import { resolveProvider, resolveRoute } from './provider-router.js'
 import { detectCapability } from './capabilities.js'
 import { loadRuntimeEnv, type RuntimeEnv } from './runtime-env.js'
+import { probeSecretAsync } from './secret-probe.js'
 import type { BrowserUseConfig, ProviderOverride, ImageTransfer, VisionMode, ScreenshotFormat, TilingMode } from './types.js'
 import type { VisionEnv } from './vision.js'
 
@@ -66,7 +67,7 @@ export const Config: Schema<Config> = Schema.object({
     supportsVision: Schema.boolean().default(false),
     imageTransfer: Schema.union(['file', 'base64', 'url', 'none'] as const).default('none'),
     maxImageBytes: Schema.number().required(false),
-    detailPreference: Schema.union(['high', 'low', 'auto'] as const).required(false),
+    detailPreference: Schema.union(['high', 'auto'] as const).required(false),
   })).default([]),
   // Optional HTTP proxy for external sites. Empty falls back to the
   // `DSH_TUI_BROWSER_PROXY` env var at browser startup.
@@ -108,7 +109,7 @@ const settingsNamespaceSchema = Schema.object({
     supportsVision: Schema.boolean().default(false),
     imageTransfer: Schema.union(['file', 'base64', 'url', 'none'] as const).default('none'),
     maxImageBytes: Schema.number().required(false),
-    detailPreference: Schema.union(['high', 'low', 'auto'] as const).required(false),
+    detailPreference: Schema.union(['high', 'auto'] as const).required(false),
   })).default([]),
   proxy: Schema.string().required(false),
   session: Schema.object({
@@ -118,45 +119,6 @@ const settingsNamespaceSchema = Schema.object({
 })
 
 // ── Harness access helpers (structural, never self-manage secrets) ──────
-
-type CredentialsLike = {
-  get?(name: string): unknown
-  read?(ref: unknown): Promise<unknown>
-  resolve?(ref: unknown): Promise<unknown>
-  [key: string]: unknown
-}
-
-/**
- * Probe one secret from the harness credentials seam (async, the real path:
- * `ctx.credentials.resolve({ env })`), then env vars, then a legacy sync
- * `.get`/`.read`. Never logs the value. Credentials service presence is
- * optional (soft-probed), so a harness without the seam falls back to env.
- */
-async function probeSecretAsync(ctx: Context, names: readonly string[]): Promise<string | null> {
-  const creds = ctx.get('credentials', false) as CredentialsLike | undefined
-  if (creds) {
-    // Correct async path: resolve({ env: 'NAME' }) → { key }.
-    if (typeof creds.resolve === 'function') {
-      for (const n of names) {
-        try {
-          const r = await (creds as { resolve(ref: unknown): Promise<{ key?: string; value?: string } | undefined> }).resolve({ env: n })
-          const v = r?.key ?? r?.value
-          if (typeof v === 'string' && v.length > 0) return v
-        } catch { /* not configured — try next */ }
-      }
-    }
-    // Legacy sync `.get` / direct keyed field, for odd harnesses.
-    for (const n of names) {
-      const v = typeof creds.get === 'function' ? creds.get(n) : creds[n]
-      if (typeof v === 'string' && v.length > 0) return v
-    }
-  }
-  for (const n of names) {
-    const env = process.env[n] ?? process.env[n.replace(/\./g, '_')]
-    if (env && env.length > 0) return env
-  }
-  return null
-}
 
 function defaultLang(ctx: Context): 'zh' | 'en' {
   const env = process.env.DSH_TUI_LANG
@@ -195,10 +157,14 @@ function registerPackagedSkill(ctx: Context, debug: (msg: string) => void): void
     }
     try {
       // Resolve the package `skills/` root from the built layout (`lib/types/`)
-      // or the source layout (`src/`); the two-candidate walk mirrors the host's
-      // packaged-skills.ts so a directory reshuffle does not silently skip it.
+      // OR the source layout (`src/`) — the candidate walk covers both, so a
+      // tsx-driven local run registers the skill too, not only the built lib.
       const here = dirname(fileURLToPath(import.meta.url))
-      const skillFile = [join(here, '..', '..', 'skills'), join(here, '..', '..', '..', 'skills')]
+      const skillFile = [
+        join(here, '..', 'skills'),
+        join(here, '..', '..', 'skills'),
+        join(here, '..', '..', '..', 'skills'),
+      ]
         .map((root) => join(root, 'browser-bridge', 'SKILL.md'))
         .find((candidate) => existsSync(candidate))
       if (!skillFile) {
@@ -299,7 +265,11 @@ export function apply(ctx: Context, config: Config): void {
     const apiKey = await probeSecretAsync(ctx, apiKeyEnvs)
     if (!apiKey) return null
 
-    const baseUrl = runtimeEnv.deepseekBaseUrl || route.baseURL
+    // `DEEPSEEK_BASE_URL` is a DeepSeek-specific override: it must never steer
+    // a non-deepseek provider's traffic to a DeepSeek endpoint (P1-02 / §6).
+    const baseUrl = provider === 'deepseek'
+      ? (runtimeEnv.deepseekBaseUrl || route.baseURL)
+      : route.baseURL
 
     // Transfer mode: explicit `deepseek-file-api` wins, then the resolved
     // capability (which already honours the user provider override / table).
@@ -416,12 +386,14 @@ export function apply(ctx: Context, config: Config): void {
     queueMicrotask(() => probe('microtask'))
   }
 
-  // Tear down the browser and settings when the plugin fiber stops.
+  // Tear down the browser and settings when the plugin fiber stops. `close`
+  // is queued onto the session's serial mutex so it drains AFTER any tool call
+  // already dispatched by the harness — never interleaved with Playwright ops.
   ctx.effect(() => {
     return () => {
       disposer?.()
       settingsDisposer?.()
-      void session.close()
+      void session.run(() => session.close())
     }
   })
 

@@ -86,5 +86,21 @@ const HASH_B = 'content-hash-bbbb'
   console.log('[6] clear() resets — OK')
 }
 
+// 7. TTL: a file_id is not reused after the provider-side expiry passes.
+{
+  const cache = new FileIdCache()
+  const scope = fileIdScopeKey('https://api.deepseek.com', 'deepseek', 'm1', 'k')
+  cache.set(scope, HASH_A, 'fid-expiring', 50)
+  assert.equal(cache.get(scope, HASH_A), 'fid-expiring', 'live entry hits before expiry')
+  await new Promise((r) => setTimeout(r, 60))
+  assert.equal(cache.get(scope, HASH_A), undefined, 'expired entry misses (re-upload required)')
+  assert.equal(cache.scopeSize(scope), 0, 'expired entry is removed')
+  // ttl 0 = permanent (file expires_after omitted).
+  cache.set(scope, HASH_A, 'fid-forever', 0)
+  await new Promise((r) => setTimeout(r, 10))
+  assert.equal(cache.get(scope, HASH_A), 'fid-forever', 'permanent entry stays cached')
+  console.log('[7] file_id TTL expiry + permanent entries — OK')
+}
+
 console.log('\n[file-cache-scope-check] ALL PASS')
 process.exit(0)

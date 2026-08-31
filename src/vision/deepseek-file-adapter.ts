@@ -64,7 +64,12 @@ export class DeepSeekFileAdapter implements VisionAdapter {
     }
     const fileId = await this.uploadFile(image, baseUrl, signal)
     image.fileId = fileId
-    fileIdCache.set(scopeKey, hash, fileId)
+    // Cache only until shortly BEFORE the provider-side expiry, so a 24h-old
+    // file_id can never be reused after the file is gone. `null` (permanent)
+    // is cached without a TTL.
+    const expires = fileExpiresSeconds(this.runtimeEnv)
+    const ttlMs = expires === null ? 0 : Math.max(1, expires * 1000 - 10_000)
+    fileIdCache.set(scopeKey, hash, fileId, ttlMs)
     return fileId
   }
 

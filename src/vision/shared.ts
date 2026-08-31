@@ -27,13 +27,13 @@ export const DEFAULT_MAX_RETRIES = 4
 export const DEFAULT_BASE_DELAY_MS = 600
 
 /** Read `Retry-After` seconds (or an HTTP-date) from a response header, if sane. */
-export function retryAfterMs(resp: Response): number | null {
+export function retryAfterMs(resp: Response, capMs = 10_000): number | null {
   const v = resp.headers.get('retry-after')
   if (!v) return null
   const secs = Number.parseInt(v, 10)
-  if (Number.isFinite(secs) && secs >= 0) return secs * 1000
+  if (Number.isFinite(secs) && secs >= 0) return Math.min(secs * 1000, capMs)
   const date = Date.parse(v)
-  if (Number.isFinite(date)) return Math.max(0, date - Date.now())
+  if (Number.isFinite(date)) return Math.max(0, Math.min(date - Date.now(), capMs))
   return null
 }
 
@@ -44,16 +44,37 @@ export function backoffDelayMs(attempt: number, baseDelayMs: number): number {
   return Math.min(baseDelayMs * 2 ** exp, 10_000) * jitter
 }
 
+/**
+ * Abort-aware sleep: rejects with the signal reason as soon as the signal
+ * fires, so a cancelled vision call never sits out a full backoff/Retry-After
+ * delay (AGENTS.md §5 — the whole vision fetch chain honours `exec.signal`).
+ */
+export async function sleepMs(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) return
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = (): void => {
+      clearTimeout(timer)
+      reject(signal?.reason ?? new Error('aborted'))
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
 /** Perform a fetch that retries on retryable statuses (429 / 5xx). */
 export async function fetchWithRetry(url: string, init: RequestInit, maxRetries = DEFAULT_MAX_RETRIES, signal?: AbortSignal): Promise<Response> {
   let attempt = 0
   for (;;) {
+    if (signal?.aborted) throw signal.reason ?? new Error('aborted')
     let resp: Response
     try {
       resp = await fetch(url, signal ? { ...init, signal } : init)
     } catch (err) {
       if (attempt >= maxRetries) throw err
-      await new Promise((r) => setTimeout(r, backoffDelayMs(attempt, DEFAULT_BASE_DELAY_MS)))
+      await sleepMs(backoffDelayMs(attempt, DEFAULT_BASE_DELAY_MS), signal)
       if (signal?.aborted) throw signal.reason ?? new Error('aborted')
       attempt += 1
       continue
@@ -62,7 +83,7 @@ export async function fetchWithRetry(url: string, init: RequestInit, maxRetries 
       return resp
     }
     const delay = retryAfterMs(resp) ?? backoffDelayMs(attempt, DEFAULT_BASE_DELAY_MS)
-    await new Promise((r) => setTimeout(r, delay))
+    await sleepMs(delay, signal)
     if (signal?.aborted) throw signal.reason ?? new Error('aborted')
     attempt += 1
   }
