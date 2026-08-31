@@ -101,5 +101,20 @@ const ACCESSORS = ['startError', 'running', 'page', 'context']
   console.log('[3] a compatible stub driver satisfies the contract — OK')
 }
 
+// 4. The tool contract stays orthogonal to the driver: all 21 definitions
+//    carry an object-rooted parameter schema and an execute function, so the
+//    same schema set drives PlaywrightDriver and a stub backend alike (B9).
+{
+  const { buildToolDefinitions } = await import('../src/tools.js')
+  const defs = buildToolDefinitions({ session: {}, lang: 'en' })
+  assert.equal(defs.length, 21, '21 tool definitions')
+  for (const d of defs) {
+    assert.equal(d.parameters?.type, 'object', `${d.name} parameters are object-rooted`)
+    assert.ok(d.parameters && typeof d.parameters === 'object' && 'properties' in d.parameters, `${d.name} declares properties`)
+    assert.equal(typeof d.execute, 'function', `${d.name} has execute`)
+  }
+  console.log('[4] all 21 tool schemas are object-rooted + executable — OK')
+}
+
 console.log('\n[driver-contract-check] ALL PASS')
 process.exit(0)

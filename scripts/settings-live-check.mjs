@@ -32,8 +32,11 @@ const SCHEMA_DEFAULTS = {
   visionMode: 'auto',
   viewport: { width: 1024, height: 768 },
   screenshot: { format: 'jpeg', quality: 80 },
-  tiling: { mode: 'auto', threshold: '1200x1200', overlap: 60 },
+  tiling: { mode: 'auto', threshold: '1200x1200', overlap: 60, maxTiles: 24 },
   providers: [],
+  // `proxy` and `session` are optional (required:false) with no object-level
+  // default in the Schemastery schema, so the host layer leaves them absent —
+  // matching the plugin's own default resolution (no managed profile).
 }
 
 /** Deep-merge the user section over the base (mirrors the host mergeLayers). */

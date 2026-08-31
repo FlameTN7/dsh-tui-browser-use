@@ -48,5 +48,7 @@ jobs:
         run: npm run build
       - name: Browser integration
         run: node --import tsx/esm scripts/browser-integration.ts
+      - name: Storage-state regression
+        run: npm run test:storage-state
       - name: Container register check
         run: node scripts/container-register-check.mjs

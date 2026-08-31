@@ -45,6 +45,9 @@ async function main() {
     assert.ok(good, 'default config validates')
     const bad = plugin.Config.validate({ screenshot: { format: 'gif' } })
     assert.ok(bad?.length, 'invalid screenshot format rejected')
+    // proposal §5.5: `detail:'low'` is prohibited for page screenshots.
+    const badLow = plugin.Config.validate({ providers: [{ provider: 'openai', supportsVision: true, imageTransfer: 'base64', detailPreference: 'low' }] })
+    assert.ok(badLow?.length, 'detailPreference low rejected')
   }
 
   // 2. Provider capability detection.
@@ -94,6 +97,9 @@ async function main() {
   for (const expected of ['browser_navigate', 'browser_screenshot', 'browser_click', 'browser_type', 'browser_evaluate', 'browser_extract', 'browser_task', 'browser_status', 'browser_snapshot', 'browser_back', 'browser_forward', 'browser_reload', 'browser_scroll', 'browser_press', 'browser_wait', 'browser_hover', 'browser_cookies', 'browser_console_messages', 'browser_network_requests', 'browser_pdf', 'browser_download']) {
     assert.ok(names.includes(expected), `tool ${expected} present`)
   }
+  // AGENTS.md §3: the smoke gate must assert EXACTLY 21 tools — an accidental
+  // 22nd tool must fail the gate, not just be listed alongside the 21.
+  assert.equal(names.length, 21, 'exactly 21 browser tools')
   for (const d of defs) {
     assert.ok(typeof d.description === 'string' && d.description.length > 0, `${d.name} has description`)
     assert.ok(d.output && typeof d.output.schema === 'object', `${d.name} declares output schema`)

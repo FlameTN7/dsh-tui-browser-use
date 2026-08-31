@@ -107,6 +107,14 @@ try {
   assert.equal(statusRes.ok, true, 'browser_status returns ok')
   assert.equal(statusRes.value.available, true, 'browser is available')
   assert.match(statusRes.value.version, /^\d+(\.\d+)+/, 'version is dotted number: ' + statusRes.value.version)
+  // Phase 3 contract: with no session config and no env override the effective
+  // session must report external/default with no managed profile dir.
+  const sess = statusRes.value.session
+  assert.ok(sess && typeof sess === 'object', 'browser_status reports value.session')
+  assert.equal(sess.mode, 'external', 'default effective mode is external')
+  assert.equal(sess.profile, 'default', 'default profile name is default')
+  assert.equal(sess.profileDir, null, 'external default has no managed profileDir')
+  assert.equal(sess.degraded, false, 'fresh start is not degraded')
 
   log('running browser.evaluate(1+2)')
   const evRes = await evDef.execute({ expression: '1 + 2' }, {})
