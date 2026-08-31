@@ -3,11 +3,16 @@
  *
  * AGENTS.md §2 / 竞品 B2: the Playwright-specific behaviour is isolated behind
  * a `BrowserDriver` interface so the harness/plugin can swap the backend (e.g.
- * a stub driver in tests, or a future headless-shell driver) without touching
- * the tool registries. `BrowserSession` keeps the orchestration that is NOT
- * driver-specific — the serial mutex (`run`), timeout envelope, dialog policy,
- * console/network ring buffers, snapshot/tiling/status/saveScreenshots — and
- * delegates the low-level browser primitives to a `BrowserDriver`.
+ * a stub driver in tests, or a future headless-shell driver). `BrowserSession`
+ * keeps the orchestration that is NOT driver-specific — the serial mutex
+ * (`run`), timeout envelope, dialog policy, console/network ring buffers,
+ * snapshot/tiling/status/saveScreenshots.
+ *
+ * Current scope (explicit downgrade, see docs/验收记录.md P2-1): the driver is
+ * a LAUNCHER abstraction. `BrowserSession` calls `start/close/version/
+ * settleStable` and reads `page/context`; navigation/click/type/screenshot/
+ * download still use the structural Playwright surface exposed by `page`. A
+ * full backend swap that hides the page handle remains future work.
  *
  * All Playwright handles are structural-typed here so the plugin compiles
  * without pulling in the playwright type package at build time (AGENTS.md §2).
@@ -122,6 +127,8 @@ export interface PwFrame {
 export interface PwContext {
   newPage(): Promise<PwPage>
   storageState(opts?: { path?: string }): Promise<Record<string, unknown>>
+  /** Seed cookies/localStorage from a parsed storage-state object (Playwright). */
+  setStorageState(storageState: Record<string, unknown>): Promise<void>
   close(): Promise<void>
   cookies(urls?: string[]): Promise<PwCookie[]>
   addCookies(cookies: Array<{ name: string; value: string; url?: string; domain?: string; path?: string }>): Promise<void>
@@ -147,14 +154,15 @@ export interface PwApiRequestContext {
 export interface PwBrowser {
   close(): Promise<void>
   newPage(): Promise<PwPage>
-  newContext(opts?: { storageState?: string }): Promise<PwContext>
+  newContext(opts?: { storageState?: string | Record<string, unknown> }): Promise<PwContext>
   version(): string
   context(): { newPage(): Promise<PwPage> }
 }
 
 export interface PwChromium {
   launch(opts: { channel?: string; executablePath?: string; headless?: boolean; args?: string[]; proxy?: { server: string; bypass?: string } }): Promise<PwBrowser>
-  launchPersistentContext(userDataDir: string, opts: { channel?: string; executablePath?: string; headless?: boolean; args?: string[]; proxy?: { server: string; bypass?: string }; storageState?: string }): Promise<PwContext>
+  /** NOTE: Playwright's `launchPersistentContext` does NOT accept `storageState`; seed it via `PwContext.setStorageState` after launch. */
+  launchPersistentContext(userDataDir: string, opts: { channel?: string; executablePath?: string; headless?: boolean; args?: string[]; proxy?: { server: string; bypass?: string } }): Promise<PwContext>
 }
 
 /** Common launch options shared by every Playwright browser engine. */

@@ -91,6 +91,16 @@ function numAttr(raw: string | undefined, fallback: number): number {
   return Number.isFinite(n) && n >= 0 ? n : fallback
 }
 
+/**
+ * Parse a timeout/cap override. Zero is INVALID for timeouts and tile caps
+ * (Playwright treats `timeout: 0` as "wait forever"), so it falls back to the
+ * documented default just like negative/NaN values.
+ */
+function positiveAttr(raw: string | undefined, fallback: number): number {
+  const n = raw ? Number.parseFloat(raw) : NaN
+  return Number.isFinite(n) && n > 0 ? n : fallback
+}
+
 /** Parse the engine selector; anything unrecognised → chromium. */
 export function parseEngine(raw: string | undefined): BrowserEngine {
   return raw === 'firefox' || raw === 'webkit' ? raw : 'chromium'
@@ -134,14 +144,14 @@ export function loadRuntimeEnv(
     userDataDir: envOrUndefined(readEnv('DSH_TUI_BROWSER_USER_DATA_DIR')),
     storageStatePath: envOrUndefined(readEnv('DSH_TUI_BROWSER_STORAGE_STATE')),
 
-    navTimeoutMs: numAttr(readEnv('DSH_TUI_BROWSER_TIMEOUT_NAVIGATION'), 45_000),
-    actionTimeoutMs: numAttr(readEnv('DSH_TUI_BROWSER_TIMEOUT_ACTION'), 12_000),
-    settleTimeoutMs: numAttr(readEnv('DSH_TUI_BROWSER_TIMEOUT_SETTLE'), 6_000),
+    navTimeoutMs: positiveAttr(readEnv('DSH_TUI_BROWSER_TIMEOUT_NAVIGATION'), 45_000),
+    actionTimeoutMs: positiveAttr(readEnv('DSH_TUI_BROWSER_TIMEOUT_ACTION'), 12_000),
+    settleTimeoutMs: positiveAttr(readEnv('DSH_TUI_BROWSER_TIMEOUT_SETTLE'), 6_000),
     // maxTiles is read LAZILY on every access (the tiling code historically
     // re-read `DSH_TUI_BROWSER_MAX_TILES` at capture time, and a /settings edit
     // to `tiling.maxTiles` must take effect mid-session). Keeping it a getter
     // preserves that live behaviour while still centralising the read here.
-    get maxTiles() { return numAttr(readEnv('DSH_TUI_BROWSER_MAX_TILES'), 24) },
+    get maxTiles() { return positiveAttr(readEnv('DSH_TUI_BROWSER_MAX_TILES'), 24) },
 
     sensitiveQueryKeys: parseSensitiveKeys(readEnv('DSH_TUI_BROWSER_SENSITIVE_QUERY_KEYS')),
 

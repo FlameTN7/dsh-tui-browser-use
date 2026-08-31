@@ -96,19 +96,23 @@ function envFrom(map) {
 {
   const e = rt.loadRuntimeEnv(envFrom({
     DSH_TUI_BROWSER_TIMEOUT_NAVIGATION: '-5', // negative → fallback
-    DSH_TUI_BROWSER_MAX_TILES: 'abc',         // non-numeric → fallback
+    DSH_TUI_BROWSER_TIMEOUT_ACTION: '0',      // zero = Playwright "wait forever" → fallback
+    DSH_TUI_BROWSER_TIMEOUT_SETTLE: '0',      // zero → fallback
+    DSH_TUI_BROWSER_MAX_TILES: '0',           // zero cap → fallback
     DSH_TUI_BROWSER_ENGINE: 'edge',           // unknown → chromium
     DSH_TUI_BROWSER_DIALOG: 'maybe',          // unknown → dismiss
     DSH_TUI_BROWSER_INPUT_RATE: '-1',
     DSH_TUI_BROWSER_FILE_EXPIRES_SECONDS: '0', // 0 → permanent (null)
   }))
   assert.equal(e.navTimeoutMs, 45_000, 'negative nav → fallback')
-  assert.equal(e.maxTiles, 24, 'non-numeric maxTiles → fallback')
+  assert.equal(e.actionTimeoutMs, 12_000, 'zero action timeout → fallback')
+  assert.equal(e.settleTimeoutMs, 6_000, 'zero settle timeout → fallback')
+  assert.equal(e.maxTiles, 24, 'zero maxTiles → fallback')
   assert.equal(e.engine, 'chromium', 'unknown engine → chromium')
   assert.equal(e.dialog, 'dismiss', 'unknown dialog → dismiss')
   assert.equal(e.inputRate, 0.28, 'negative rate → fallback')
   assert.equal(e.fileExpiresSeconds, null, '0 file-expiry → permanent')
-  console.log('[3] invalid values fall back to defaults — OK')
+  console.log('[3] invalid values (incl. zero timeouts/caps) fall back to defaults — OK')
 }
 
 // 4. parseFileExpires boundary cases.

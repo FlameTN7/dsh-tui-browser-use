@@ -46,11 +46,11 @@ interface PwElementHandle {
 
 /** A Playwright locator handle (structural, minimal for click/fill/wait). */
 interface PwLocator {
-  click(): Promise<void>
-  fill(text: string): Promise<void>
+  click(opts?: { timeout?: number }): Promise<void>
+  fill(text: string, opts?: { timeout?: number }): Promise<void>
   type(text: string): Promise<void>
-  clear(): Promise<void>
-  hover(): Promise<void>
+  clear(opts?: { timeout?: number }): Promise<void>
+  hover(opts?: { timeout?: number }): Promise<void>
   first(): PwLocator
   waitFor(opts?: { state?: 'visible' | 'hidden' | 'attached' | 'detached'; timeout?: number }): Promise<void>
   count(): Promise<number>
@@ -309,17 +309,33 @@ async function captureWithBudget(
  */
 export function sanitizeUrl(raw: string, sensitiveKeys: string[] = DEFAULT_SENSITIVE_QUERY_KEYS): string {
   if (!raw) return raw
+  const keys = sensitiveKeys.map((k) => k.toLowerCase()).filter(Boolean)
+  // A query name is sensitive when it equals a configured key, or when one of
+  // its `_`/`-`-separated segments equals one (`auth_token`, `api_key`, ...).
+  // Plain substring matching was too greedy: `monkey`/`hockey`/`author` were
+  // wiped because they merely CONTAIN `key`/`auth`.
+  const isSensitive = (name: string): boolean => {
+    const n = name.toLowerCase()
+    if (keys.includes(n)) return true
+    return n.split(/[_-]/).some((segment) => keys.includes(segment))
+  }
   try {
     const u = new URL(raw)
+    // Never surface userinfo: Basic-Auth credentials in an href are as
+    // sensitive as a token and must not reach the model context.
+    if (u.username !== '' || u.password !== '') {
+      u.username = ''
+      u.password = ''
+    }
     for (const key of [...u.searchParams.keys()]) {
-      if (sensitiveKeys.some((k) => key.toLowerCase().includes(k.toLowerCase()))) {
-        u.searchParams.delete(key)
-      }
+      if (isSensitive(key)) u.searchParams.delete(key)
     }
     return u.toString()
   } catch {
-    // Relative href / unparseable: strip common `?key=value` pairs by hand.
-    return raw.replace(/([?&](?:token|key|signature|sig|secret|api_key|apikey|access_token|session|cred|auth)=)[^&]*/gi, '$1***')
+    // Relative href / unparseable: rewrite each `?name=value` pair by hand,
+    // honouring the caller-configured sensitive key list.
+    return raw.replace(/([?&])([^=&#]+)=([^&#]*)/g, (match, sep: string, name: string) =>
+      isSensitive(name) ? `${sep}${name}=***` : match)
   }
 }
 
@@ -521,6 +537,9 @@ export class BrowserSession {
         releaseLock(this.sessionPaths.lockPath)
         this.sessionLocked = false
       }
+      // A failed isolated attempt materialised a fresh ephemeral dir; the next
+      // attempt resolves a NEW run id, so purge this one instead of leaking it.
+      if (this.sessionPaths.ephemeralRunDir) purgeEphemeral(this.sessionPaths.ephemeralRunDir)
       this.page = null
       this.ctx = null
       return false
@@ -632,7 +651,7 @@ export class BrowserSession {
       // Wait for the target to be actionable (SPA/lazy).
       const locator = await resolveFrameAware(page, params.selector, params.text)
       await waitForLocator(locator, this.actionTimeoutMs)
-      await locator.first().click()
+      await locator.first().click({ timeout: this.actionTimeoutMs })
       await page.waitForLoadState('load').catch(() => undefined)
       await this.settlePage()
       const result: ClickResult = { success: true, newUrl: sanitizeUrl(page.url() || before, this.env.sensitiveQueryKeys) }
@@ -656,8 +675,8 @@ export class BrowserSession {
       const locator = await resolveFrameAware(page, params.selector, undefined)
       await waitForLocator(locator, this.actionTimeoutMs)
       const field = locator.first()
-      if (params.clear) await field.clear().catch(() => undefined)
-      await field.fill(params.text)
+      if (params.clear) await field.clear({ timeout: this.actionTimeoutMs }).catch(() => undefined)
+      await field.fill(params.text, { timeout: this.actionTimeoutMs })
       // Optional trailing keypress (e.g. `Enter` to submit a form) — requires a
       // focused page, which Playwright keeps after fill.
       if (params.enter) {
@@ -686,7 +705,7 @@ export class BrowserSession {
     const page = this.requirePage()
     try {
       const before = page.url()
-      const resp = await page.goBack({ waitUntil: 'domcontentloaded', timeout: this.navTimeoutMs }).catch(() => null)
+      const resp = await page.goBack({ waitUntil: 'domcontentloaded', timeout: this.navTimeoutMs })
       return await this.navSettle(resp, before)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -699,7 +718,7 @@ export class BrowserSession {
     const page = this.requirePage()
     try {
       const before = page.url()
-      const resp = await page.goForward({ waitUntil: 'domcontentloaded', timeout: this.navTimeoutMs }).catch(() => null)
+      const resp = await page.goForward({ waitUntil: 'domcontentloaded', timeout: this.navTimeoutMs })
       return await this.navSettle(resp, before)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -712,7 +731,7 @@ export class BrowserSession {
     const page = this.requirePage()
     try {
       const before = page.url()
-      const resp = await page.reload({ waitUntil: 'domcontentloaded', timeout: this.navTimeoutMs }).catch(() => null)
+      const resp = await page.reload({ waitUntil: 'domcontentloaded', timeout: this.navTimeoutMs })
       return await this.navSettle(resp, before)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -778,7 +797,7 @@ export class BrowserSession {
       // `text` (visible text) wins over `selector`; search main frame then frames.
       const locator = await resolveFrameAware(page, params.selector, params.text)
       await waitForLocator(locator, this.actionTimeoutMs)
-      await locator.first().hover()
+      await locator.first().hover({ timeout: this.actionTimeoutMs })
       // Let any hover-triggered UI settle a beat.
       await page.evaluate('new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))').catch(() => undefined)
       return { success: true }
@@ -792,9 +811,9 @@ export class BrowserSession {
     if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? 'browser unavailable')
     const ctx = this.requireContext()
     try {
-      if (params.clear) await ctx.clearCookies().catch(() => undefined)
+      if (params.clear) await ctx.clearCookies()
       if (params.cookies && params.cookies.length > 0) {
-        await ctx.addCookies(params.cookies).catch(() => undefined)
+        await ctx.addCookies(params.cookies)
       }
       const cookies = await ctx.cookies()
       // Redact cookie values by default so auth state never leaks into the
@@ -808,14 +827,14 @@ export class BrowserSession {
   }
 
   async consoleMessages(params: ConsoleMessagesParams): Promise<ConsoleMessagesResult> {
-    if (!(await this.ensureStarted())) return { messages: [] }
+    if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? t('error.browser-missing', this.lang))
     const out = [...this.consoleLog]
     if (params.clear !== false) this.consoleLog = []
     return { messages: out }
   }
 
   async networkRequests(params: NetworkRequestsParams): Promise<NetworkRequestsResult> {
-    if (!(await this.ensureStarted())) return { requests: [] }
+    if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this.startError ?? t('error.browser-missing', this.lang))
     const out = [...this.networkLog]
     if (params.clear !== false) this.networkLog = []
     return { requests: out }
@@ -918,6 +937,11 @@ export class BrowserSession {
     const neededRows = pageH > vpH ? Math.ceil((pageH - vpH) / stepY) + 1 : 1
     const segmentsTotal = neededCols * neededRows
 
+    // Remember where the page was so an observation never leaves it scrolled.
+    const startScroll = await page.evaluate<{ x: number; y: number }>(
+      '({ x: window.scrollX, y: window.scrollY })',
+    ).catch(() => ({ x: 0, y: 0 }))
+
     const buffers: Buffer[] = []
     let capturedWidth = 0
     let capturedHeight = 0
@@ -934,8 +958,9 @@ export class BrowserSession {
         capturedHeight = Math.max(capturedHeight, y + vpH)
       }
     }
-    // Restore the scroll position for the next tool call.
-    await page.evaluate('window.scrollTo(0, 0)').catch(() => undefined)
+    // Restore the ORIGINAL scroll position for the next tool call (tiling is an
+    // observation and must not move the page under the agent).
+    await page.evaluate(`window.scrollTo(${startScroll.x}, ${startScroll.y})`).catch(() => undefined)
     if (buffers.length === 0) return single()
 
     const truncated = buffers.length < segmentsTotal

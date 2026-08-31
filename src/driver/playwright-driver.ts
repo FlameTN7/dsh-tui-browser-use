@@ -14,7 +14,7 @@
  * instead of issuing a doomed call.
  */
 
-import { existsSync, readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs'
+import { existsSync, readdirSync, statSync, openSync, readSync, closeSync, readFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import type { RuntimeEnv } from '../runtime-env.js'
@@ -78,6 +78,36 @@ function isRealBrowserBinary(p: string): boolean {
 /** Throw if the signal is already aborted (pre-dispatch short-circuit, B8). */
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw signal.reason ?? new Error('aborted')
+}
+
+/**
+ * Load a storage-state snapshot as a parsed object. An absent, unreadable or
+ * malformed file returns `undefined` so the caller launches a FRESH session
+ * instead of failing browser startup (AGENTS.md §5: read failure falls back to
+ * a fresh session, never a startup error).
+ */
+function loadStorageState(path: string | undefined): Record<string, unknown> | undefined {
+  if (!path || !existsSync(path)) return undefined
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    return typeof parsed === 'object' && parsed !== null
+      ? parsed as Record<string, unknown>
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Apply a parsed storage-state snapshot to an already-launched context. Used
+ * for `launchPersistentContext`, which does NOT accept Playwright's
+ * `storageState` option (it is silently ignored there); `BrowserContext.
+ * setStorageState` is the supported way to seed cookies/localStorage in that
+ * path. Failures degrade to the fresh session the profile itself provides.
+ */
+async function applyStorageState(ctx: PwContext, state: Record<string, unknown> | undefined): Promise<void> {
+  if (!state) return
+  try { await ctx.setStorageState(state) } catch { /* fresh session fallback */ }
 }
 
 export class PlaywrightDriver implements BrowserDriver {
@@ -167,9 +197,7 @@ export class PlaywrightDriver implements BrowserDriver {
       const proxy = resolveProxy(opts.config.proxy, opts.env)
       const engine: PwBrowserEngine = opts.env.engine
       const handlers = opts.handlers
-      const storageState = opts.env.storageStatePath && existsSync(opts.env.storageStatePath)
-        ? opts.env.storageStatePath
-        : undefined
+      const storageState = loadStorageState(opts.env.storageStatePath)
       const baseOpts = { headless: true, args: engineLaunchArgs(engine, opts.env.noSandbox), ...(proxy ? { proxy } : {}) }
 
       if (engine !== 'chromium') {
@@ -181,11 +209,12 @@ export class PlaywrightDriver implements BrowserDriver {
         // `browserType.launch` rejects `userDataDir`; use `launchPersistentContext`
         // when the session resolves a managed user-data dir (persistent/isolated).
         if (opts.env.userDataDir && inject.launchPersistentContext) {
-          this._ctx = await inject.launchPersistentContext(opts.env.userDataDir, { ...baseOpts, ...(storageState ? { storageState } : {}) })
+          this._ctx = await inject.launchPersistentContext(opts.env.userDataDir, baseOpts)
           this._engine = this._ctx.browser()
+          await applyStorageState(this._ctx, storageState)
         } else {
           this._engine = await inject.launch(baseOpts)
-          this._ctx = await this._engine.newContext({ storageState })
+          this._ctx = await this._engine.newContext(storageState ? { storageState } : {})
         }
       } else {
         // Chromium launch sources in order: channel:'chrome' → explicit binary → bundled.
@@ -201,7 +230,7 @@ export class PlaywrightDriver implements BrowserDriver {
           try {
             const pass = { ...baseOpts, ...src }
             launched = persistent
-              ? await pw.chromium.launchPersistentContext(persistent, { ...pass, ...(storageState ? { storageState } : {}) })
+              ? await pw.chromium.launchPersistentContext(persistent, pass)
               : await pw.chromium.launch(pass)
             break
           } catch (err) {
@@ -212,9 +241,10 @@ export class PlaywrightDriver implements BrowserDriver {
         if (persistent) {
           this._ctx = launched as PwContext
           this._engine = this._ctx.browser()
+          await applyStorageState(this._ctx, storageState)
         } else {
           this._engine = launched as PwBrowser
-          this._ctx = await this._engine.newContext({ storageState })
+          this._ctx = await this._engine.newContext(storageState ? { storageState } : {})
         }
       }
       const page = await this._ctx.newPage()
@@ -237,9 +267,10 @@ export class PlaywrightDriver implements BrowserDriver {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       this._startError = `browser-launch-failed:${msg}`
-      this._engine = null
-      this._page = null
-      this._ctx = null
+      // A failure after `launch`/`launchPersistentContext` (e.g. `newPage` or
+      // `setViewportSize` threw) must not leak the already-started browser
+      // process. `close()` is idempotent and swallows its own errors.
+      await this.close()
       return false
     }
   }

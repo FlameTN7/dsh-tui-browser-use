@@ -20,7 +20,7 @@
  * new config `session.mode=persistent|isolated` / `session.profile=<name>`
  * drives the managed paths when no env override is present.
  */
-import { chmodSync, mkdirSync, openSync, closeSync, unlinkSync, writeFileSync, renameSync, rmSync, readFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, openSync, closeSync, unlinkSync, writeSync, writeFileSync, renameSync, rmSync, readFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
@@ -272,9 +272,11 @@ export function acquireLock(lockPath: string): { held: true } | { held: false; r
   try {
     // Profiles are lazily created; ensure the lock's parent dir exists first.
     mkdirSync(dirname(lockPath), { recursive: true })
+    // Write the PID through the SAME file descriptor used for the O_EXCL
+    // create, so the lock file is never observable as an empty file (an empty
+    // file would be misread as stale and deleted by a concurrent process).
     const fd = openSync(lockPath, 'wx')
-    try { writeFileSync(lockPath, `${process.pid}\n`, { mode: 0o600 }) } catch { /* best-effort */ }
-    closeSync(fd)
+    try { writeSync(fd, `${process.pid}\n`) } finally { closeSync(fd) }
     return { held: true }
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code
