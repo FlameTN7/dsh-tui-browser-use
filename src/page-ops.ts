@@ -641,7 +641,7 @@ export class PageOps {
     const maxNodes = Math.min(Math.max(Number(params.maxNodes) || 200, 1), 500)
     const wantDelta = params.delta === true
     try {
-      const nodes = (await this.host.driver.evaluate<unknown[]>(
+      const nodes = (await this.host.driver.evaluate<unknown>(
         `(() => {
           const MAX = ${maxNodes};
           const DELTA = ${wantDelta ? 'true' : 'false'};
@@ -775,24 +775,6 @@ export class PageOps {
    * back-compat callers; returns '' as a no-op.
    */
   async elementSummary(): Promise<string> {
-    if (!(await this.host.ensureStarted())) return ''
-    try {
-      const result = await this.host.driver.evaluate(
-        `(() => {
-          const pick = (sel) => [...document.querySelectorAll(sel)]
-            .filter((el) => el.offsetWidth > 0 || el.offsetHeight > 0)
-            .slice(0, 30)
-            .map((el) => (el.innerText || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('name') || el.getAttribute('value') || el.textContent || '').trim().slice(0, 80))
-            .filter(Boolean);
-          const links = pick('a[href]');
-          const buttons = pick('button, input[type=button], input[type=submit], [role=button]');
-          const inputs = pick('input:not([type=hidden]), textarea, [contenteditable=true]');
-          return ['links:', ...links, 'buttons:', ...buttons, 'inputs:', ...inputs].join('\\n');
-        })()`,
-      )
-      return typeof result === 'string' ? result : ''
-    } catch {
-      return ''
-    }
+    return ''
   }
 }

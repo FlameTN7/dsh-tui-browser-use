@@ -105,12 +105,10 @@ async function main() {
   // PNG magic
   assert.ok(buf[0] === 0x89 && buf[1] === 0x50, 'screenshot is a PNG')
 
-  // elementSummary: should list the link/button/input
+  // elementSummary: deprecated no-op (AGENTS.md §6: unified under browser_snapshot).
   const summary = await session.elementSummary()
-  console.log('[integ] elementSummary:\n' + summary)
-  assert.match(summary, /跳到 B 区/, 'summary lists the link')
-  assert.match(summary, /点我/, 'summary lists the button')
-  assert.match(summary, /姓名/, 'summary lists the input placeholder')
+  console.log('[integ] elementSummary (deprecated no-op):', JSON.stringify(summary))
+  assert.equal(summary, '', 'elementSummary is a no-op')
 
   // snapshot: returns a structured a11y element index (role/name/bbox)
   const snap = await session.snapshot({})
