@@ -95,5 +95,18 @@ function makeCall(responses, seen) {
   console.log('[6] parseJsonReply string-brace + top-level array pass')
 }
 
+// 7. parseJsonReply: non-JSON prose with braces BEFORE the real JSON must not
+//    cause a false undefined (regression for the bracket-scan fix).
+{
+  const { parseJsonReply } = await import('../src/schema-validate.js')
+  // Text containing a brace block that is NOT JSON, then a valid JSON object.
+  assert.deepEqual(parseJsonReply('Count: {n/a} but the data is {"heading":"Hi","links":[]}'), { heading: 'Hi', links: [] })
+  // Text containing a non-JSON object before a valid JSON array.
+  assert.deepEqual(parseJsonReply('Prefix {not json} then [1,2,3]'), [1, 2, 3])
+  // Valid JSON with prose before AND after.
+  assert.deepEqual(parseJsonReply('The page shows: {"a":1} (that is all)'), { a: 1 })
+  console.log('[7] parseJsonReply skips non-JSON prose-braces pass')
+}
+
 console.log('\n[extract-retry-check] ALL PASS')
 process.exit(0)

@@ -106,31 +106,37 @@ export function parseJsonReply(text: string): unknown {
   } catch {
     // fall through to bracket-scan
   }
-  // Otherwise find the first balanced {...} or [...] block, ignoring braces
-  // that appear inside JSON strings (a page value like {"x":"}"} must not
-  // terminate the scan early).
-  const start = candidate.search(/[\[{]/)
-  if (start < 0) return undefined
-  const open = candidate[start]!
-  const close = open === '{' ? '}' : ']'
-  let depth = 0
-  let inString = false
-  let escaped = false
-  for (let i = start; i < candidate.length; i += 1) {
-    const ch = candidate[i]!
-    if (inString) {
-      if (escaped) escaped = false
-      else if (ch === '\\') escaped = true
-      else if (ch === '"') inString = false
-      continue
-    }
-    if (ch === '"') { inString = true; continue }
-    if (ch === open) depth += 1
-    else if (ch === close) {
-      depth -= 1
-      if (depth === 0) {
-        const slice = candidate.slice(start, i + 1)
-        try { return JSON.parse(slice) } catch { return undefined }
+  // Otherwise scan EVERY candidate bracket position and try to extract a
+  // balanced {...} or [...] block from it. The model often prefixes JSON with
+  // prose that may itself contain braces (e.g. `Count: {n/a} ...`), so the
+  // FIRST candidate is not always the JSON. Trying each position in turn
+  // avoids returning false undefined when a later block is the real payload.
+  for (let start = 0; start < candidate.length; start += 1) {
+    const open = candidate[start]!
+    if (open !== '{' && open !== '[') continue
+    const close = open === '{' ? '}' : ']'
+    let depth = 0
+    let inString = false
+    let escaped = false
+    for (let i = start; i < candidate.length; i += 1) {
+      const ch = candidate[i]!
+      if (inString) {
+        if (escaped) escaped = false
+        else if (ch === '\\') escaped = true
+        else if (ch === '"') inString = false
+        continue
+      }
+      if (ch === '"') { inString = true; continue }
+      if (ch === open) depth += 1
+      else if (ch === close) {
+        depth -= 1
+        if (depth === 0) {
+          const slice = candidate.slice(start, i + 1)
+          try { return JSON.parse(slice) } catch {
+            // Not valid JSON — try the next candidate position.
+            break
+          }
+        }
       }
     }
   }
