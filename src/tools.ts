@@ -126,6 +126,16 @@ function fail(err: unknown): ResultEnvelope<never> {
   return { ok: false, error: { code, message: sanitizeMessage(msg) } }
 }
 
+// Cooperative abort budget: a tool's cooperative timeout must resolve its own
+// `timed-out` envelope just BEFORE the host hard-kills it. Derive the budget
+// from the tool's `timeoutMs` (minus a small margin) instead of a hand-written
+// constant, so changing a tool's `timeoutMs` can never leave a stale budget
+// sitting past the host kill (the exact drift this guard prevents).
+const BUDGET_MARGIN_MS = 500
+function toolBudget(timeoutMs: number): number {
+  return Math.max(1, timeoutMs - BUDGET_MARGIN_MS)
+}
+
 // Cap the rendered success text so a huge page value (e.g. a 50k-char evaluate
 // result) cannot blow the model context. Mark truncation explicitly so the
 // model knows content was dropped (P0-04).
@@ -157,6 +167,9 @@ export function renderText(_args: unknown, value: unknown): Array<Record<string,
   } else {
     text = JSON.stringify(value ?? null)
   }
+  // Page-derived success values (console/network/snapshot) may carry ANSI escape
+  // sequences from the page; strip them so the model only ever sees clean text.
+  text = text.replace(ANSI_RE, '')
   if (text.length > MAX_RENDER_TEXT) {
     text = `${text.slice(0, MAX_RENDER_TEXT)}…(truncated, original ${text.length} chars)`
   }
@@ -356,7 +369,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         if (!p.url) return fail(t('error.argument', lang, { message: 'url required' }))
         try {
           // B8: a wall-clock-exceeded tool must not dispatch the navigation.
-          return ok(await session.navigate(p, abortSignalOf(exec, deps.runtimeEnv.navTimeoutMs, 29_500)))
+          return ok(await session.navigate(p, abortSignalOf(exec, deps.runtimeEnv.navTimeoutMs, toolBudget(30_000))))
         } catch (err) { return fail(err) }
       },
     },
@@ -403,7 +416,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
           const cap = await capturePreparedImages(session, lang, env?.maxImageBytes)
           // One signal for the WHOLE call: with no harness signal this is a
           // single wall-clock budget, not a fresh budget per vision attempt.
-          const signal = abortSignalOf(exec, 60_000, 59_500)
+          const signal = abortSignalOf(exec, 60_000, toolBudget(60_000))
           let insight = ''
           let fileId = ''
           if (visionActive && cap.images.length > 0) {
@@ -459,7 +472,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       async execute(args: unknown, exec?: unknown): Promise<ResultEnvelope<ClickResult>> {
         const p = (args ?? {}) as ClickParams
         try {
-          return ok(await session.click(p, abortSignalOf(exec, deps.runtimeEnv.actionTimeoutMs, 14_500)))
+          return ok(await session.click(p, abortSignalOf(exec, deps.runtimeEnv.actionTimeoutMs, toolBudget(15_000))))
         } catch (err) { return fail(err) }
       },
     },
@@ -480,7 +493,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       async execute(args: unknown, exec?: unknown): Promise<ResultEnvelope<TypeResult>> {
         const p = (args ?? {}) as TypeParams
         try {
-          return ok(await session.type(p, abortSignalOf(exec, deps.runtimeEnv.actionTimeoutMs, 14_500)))
+          return ok(await session.type(p, abortSignalOf(exec, deps.runtimeEnv.actionTimeoutMs, toolBudget(15_000))))
         } catch (err) { return fail(err) }
       },
     },
@@ -497,7 +510,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       async execute(args: unknown, exec?: unknown): Promise<ResultEnvelope<EvaluateResult>> {
         const p = (args ?? {}) as EvaluateParams
         try {
-          return ok({ result: (await session.evaluate(p, abortSignalOf(exec, deps.runtimeEnv.actionTimeoutMs, 14_500))).result })
+          return ok({ result: (await session.evaluate(p, abortSignalOf(exec, deps.runtimeEnv.actionTimeoutMs, toolBudget(15_000)))).result })
         } catch (err) { return fail(err) }
       },
     },
@@ -522,7 +535,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
           const { analyzeImages } = await import('./vision.js')
           // One signal for the whole call (retries included), so the declared
           // 60s `timeoutMs` is a wall-clock ceiling, not a per-attempt budget.
-          const signal = abortSignalOf(exec, 60_000, 59_500)
+          const signal = abortSignalOf(exec, 60_000, toolBudget(60_000))
 
           // The schema contract is asserted on every attempt so the model never
           // drifts into prose even when a caller supplies a bare instruction.
@@ -578,7 +591,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
           const budget = Math.max(1, Math.round(maxSteps * 0.75))
           // One signal for the whole task loop: the declared 120s `timeoutMs`
           // is a wall-clock ceiling for ALL steps, not a per-step budget.
-          const signal = abortSignalOf(exec, 120_000, 119_500)
+          const signal = abortSignalOf(exec, 120_000, toolBudget(120_000))
           const { analyzeImages } = await import('./vision.js')
           while (steps < maxSteps && !done && consecutiveFailures < maxFailures) {
             steps += 1
@@ -682,7 +695,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       isConcurrencySafe: () => false,
       async execute(_args: unknown, exec?: unknown): Promise<ResultEnvelope<NavigationResult>> {
         try {
-          return ok(await session.back(abortSignalOf(exec, deps.runtimeEnv.navTimeoutMs, 29_500)))
+          return ok(await session.back(abortSignalOf(exec, deps.runtimeEnv.navTimeoutMs, toolBudget(30_000))))
         } catch (err) { return fail(err) }
       },
     },
@@ -696,7 +709,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       isConcurrencySafe: () => false,
       async execute(_args: unknown, exec?: unknown): Promise<ResultEnvelope<NavigationResult>> {
         try {
-          return ok(await session.forward(abortSignalOf(exec, deps.runtimeEnv.navTimeoutMs, 29_500)))
+          return ok(await session.forward(abortSignalOf(exec, deps.runtimeEnv.navTimeoutMs, toolBudget(30_000))))
         } catch (err) { return fail(err) }
       },
     },
@@ -710,7 +723,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       isConcurrencySafe: () => false,
       async execute(_args: unknown, exec?: unknown): Promise<ResultEnvelope<NavigationResult>> {
         try {
-          return ok(await session.reload(abortSignalOf(exec, deps.runtimeEnv.navTimeoutMs, 29_500)))
+          return ok(await session.reload(abortSignalOf(exec, deps.runtimeEnv.navTimeoutMs, toolBudget(30_000))))
         } catch (err) { return fail(err) }
       },
     },
@@ -725,11 +738,14 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       }),
       output: { schema: envelopeSchema(), render: renderActionDelta },
       timeoutMs: 10_000,
-      isConcurrencySafe: () => true,
+      // Scroll mutates the page scroll position, so it is NOT concurrency-safe.
+      // (The registry serializes every tool through session.run() anyway, but
+      // this flag must not advertise a write as safe to dispatch in parallel.)
+      isConcurrencySafe: () => false,
       async execute(args: unknown, exec?: unknown): Promise<ResultEnvelope<ScrollResult>> {
         const p = (args ?? {}) as ScrollParams
         try {
-          return ok(await session.scroll(p, abortSignalOf(exec, deps.runtimeEnv.actionTimeoutMs, 9_500)))
+          return ok(await session.scroll(p, abortSignalOf(exec, deps.runtimeEnv.actionTimeoutMs, toolBudget(10_000))))
         } catch (err) { return fail(err) }
       },
     },
@@ -746,7 +762,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       async execute(args: unknown, exec?: unknown): Promise<ResultEnvelope<PressResult>> {
         const p = (args ?? {}) as PressParams
         try {
-          return ok(await session.press(p, abortSignalOf(exec, deps.runtimeEnv.actionTimeoutMs, 9_500)))
+          return ok(await session.press(p, abortSignalOf(exec, deps.runtimeEnv.actionTimeoutMs, toolBudget(10_000))))
         } catch (err) { return fail(err) }
       },
     },
@@ -765,7 +781,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       async execute(args: unknown, exec?: unknown): Promise<ResultEnvelope<WaitResult>> {
         const p = (args ?? {}) as WaitParams
         try {
-          return ok(await session.wait(p, abortSignalOf(exec, deps.runtimeEnv.settleTimeoutMs, 29_500)))
+          return ok(await session.wait(p, abortSignalOf(exec, deps.runtimeEnv.settleTimeoutMs, toolBudget(30_000))))
         } catch (err) { return fail(err) }
       },
     },
@@ -783,7 +799,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       async execute(args: unknown, exec?: unknown): Promise<ResultEnvelope<HoverResult>> {
         const p = (args ?? {}) as HoverParams
         try {
-          return ok(await session.hover(p, abortSignalOf(exec, deps.runtimeEnv.actionTimeoutMs, 14_500)))
+          return ok(await session.hover(p, abortSignalOf(exec, deps.runtimeEnv.actionTimeoutMs, toolBudget(15_000))))
         } catch (err) { return fail(err) }
       },
     },
@@ -874,7 +890,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         const p = (args ?? {}) as DownloadParams
         if (!p.url) return fail(t('error.argument', lang, { message: 'url required' }))
         try {
-          return ok(await session.download(p, abortSignalOf(exec, deps.runtimeEnv.navTimeoutMs, 59_500)))
+          return ok(await session.download(p, abortSignalOf(exec, deps.runtimeEnv.navTimeoutMs, toolBudget(60_000))))
         } catch (err) { return fail(err) }
       },
     },

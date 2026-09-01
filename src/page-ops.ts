@@ -796,7 +796,11 @@ export class PageOps {
     }
   }
 
-  /** Gather a best-effort summary of visible interactive elements. */
+  /**
+   * @deprecated DOM observation is unified under `browser_snapshot` (AGENTS.md
+   * §6: never re-instate the elementSummary summary path). Kept only for
+   * back-compat callers; returns '' as a no-op.
+   */
   async elementSummary(): Promise<string> {
     if (!(await this.host.ensureStarted())) return ''
     const page = this.requirePage()

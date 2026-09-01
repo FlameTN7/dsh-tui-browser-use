@@ -17,6 +17,7 @@
  */
 
 import { mkdirSync } from 'node:fs'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { t } from './i18n.js'
 import { effectiveViewport } from './capabilities.js'
 import { loadRuntimeEnv, type RuntimeEnv } from './runtime-env.js'
@@ -92,6 +93,12 @@ export class BrowserSession implements PageOpsHost {
   // funnelled through `run()`, which chains each task onto the previous so the
   // session is a strict serial queue.
   private chain: Promise<unknown> = Promise.resolve()
+  // Re-entrancy guard for `run()`. AsyncLocalStorage propagates the flag across
+  // `await` inside a queued task, so a page-op that (incorrectly) calls `run()`
+  // while a task is in-flight is detected as a self-deadlock and rejected —
+  // while a legitimate second `run()` from the harness (a separate async
+  // context) is left untouched and simply queued.
+  private static readonly RUN_CTX = new AsyncLocalStorage<true>()
 
   // ── Parameterized timeouts (P1 #9), env-overridable ────────────────────
   readonly navTimeoutMs: number
@@ -153,7 +160,10 @@ export class BrowserSession implements PageOpsHost {
   }
 
   run<T>(task: () => Promise<T>): Promise<T> {
-    const result = this.chain.then(() => task())
+    if (BrowserSession.RUN_CTX.getStore()) {
+      throw new Error('BrowserSession.run() called from inside a queued task (re-entrant). Page-op methods must not call session.run().')
+    }
+    const result = this.chain.then(() => BrowserSession.RUN_CTX.run(true, () => task()))
     this.chain = result.then(() => undefined, () => undefined)
     return result
   }
@@ -341,6 +351,7 @@ export class BrowserSession implements PageOpsHost {
   saveScreenshots(buffers: Buffer[], savePath: string, format: string): Promise<{ savedPath: string; savedPaths: string[] }> { return this.ops.saveScreenshots(buffers, savePath, format) }
   snapshot(params: SnapshotParams): Promise<SnapshotResult> { return this.ops.snapshot(params) }
   cookies(params: CookiesParams): Promise<CookiesResult> { return this.ops.cookies(params) }
+  /** @deprecated DOM observation is unified under `browser_snapshot`; kept for back-compat. */
   elementSummary(): Promise<string> { return this.ops.elementSummary() }
 
   async consoleMessages(params: ConsoleMessagesParams): Promise<ConsoleMessagesResult> {
