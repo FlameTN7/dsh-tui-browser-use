@@ -2,12 +2,18 @@
  * dsh-tui-browser-use — harness credential probing.
  *
  * AGENTS.md §6: secrets are resolved ASYNC through the harness credentials seam
- * (`ctx.credentials.resolve({ env })`) because a key may live in profile
+ * (`ctx.credentials.resolve(ref)`) because a key may live in profile
  * `.credentials.yaml` refs rather than in the process environment. When a
  * credentials SERVICE is present it is the only authority — process env is NOT
  * consulted, so a stale env var can never shadow or override a profile ref.
  * Only a host WITHOUT the seam (stub harnesses, third-party integrations)
  * falls back to env vars. Values are never logged.
+ *
+ * `CredentialRef` is a bare POSIX identifier string (e.g. `'DEEPSEEK_API_KEY'`),
+ * NOT `{ env: name }` — the provider's `launchEnvironment.getFrom(ref)` keys its
+ * layers by string, so the object shape never matched and any key present in
+ * the process env or `.credentials.yaml` resolved to `undefined`, degrading the
+ * whole vision path (regression from 55e070c, where the env fallback masked it).
  */
 
 type CredentialsLike = {
@@ -28,9 +34,17 @@ interface ContextLike {
 export async function probeSecretAsync(ctx: ContextLike, names: readonly string[]): Promise<string | null> {
   const creds = ctx.get('credentials', false) as CredentialsLike | undefined
   if (creds) {
-    // Correct async path: resolve({ env: 'NAME' }) → { key }.
+    // Correct async path: resolve('NAME') → { value }. CredentialRef is a bare
+    // POSIX identifier (string), not an object; `{ env: n }` was never accepted
+    // by dsh-credentials-local's string-keyed launch-environment lookup.
     if (typeof creds.resolve === 'function') {
       for (const n of names) {
+        try {
+          const r = await (creds as { resolve(ref: unknown): Promise<{ key?: string; value?: string } | undefined> }).resolve(n)
+          const v = r?.key ?? r?.value
+          if (typeof v === 'string' && v.length > 0) return v
+        } catch { /* not configured — try next */ }
+        // Compatibility: some harnesses historically accepted { env } shape.
         try {
           const r = await (creds as { resolve(ref: unknown): Promise<{ key?: string; value?: string } | undefined> }).resolve({ env: n })
           const v = r?.key ?? r?.value
