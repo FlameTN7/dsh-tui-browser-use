@@ -66,12 +66,12 @@ function ok<T>(value: T, usage?: Usage): ResultEnvelope<T> {
   // and the harness rejects the tool result as "not losslessly JSON". Callers
   // pass optional fields that legitimately stay absent (e.g.
   // visionUnavailableReason when vision succeeded); strip them here so every
-  // tool result survives the boundary.
+  // tool result survives the boundary. Build a slim copy when needed — never
+  // mutate the caller's value object (a later caller may reuse it).
   if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-    for (const key of Object.keys(value)) {
-      if ((value as Record<string, unknown>)[key] === undefined) {
-        delete (value as Record<string, unknown>)[key]
-      }
+    const entrylist = Object.entries(value as Record<string, unknown>)
+    if (entrylist.some(([, v]) => v === undefined)) {
+      value = Object.fromEntries(entrylist.filter(([, v]) => v !== undefined)) as T
     }
   }
   return usage !== undefined ? { ok: true, value, usage } : { ok: true, value }
