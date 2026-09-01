@@ -19,7 +19,8 @@
 import { mkdirSync } from 'node:fs'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { t } from './i18n.js'
-import { effectiveViewport } from './capabilities.js'
+import { effectiveViewport, detectCapability } from './capabilities.js'
+import { resolveProvider, resolveRoute, hasRoutableBaseUrl } from './provider-router.js'
 import { loadRuntimeEnv, type RuntimeEnv } from './runtime-env.js'
 import { PlaywrightDriver } from './driver/playwright-driver.js'
 import type { BrowserDriver } from './driver/browser-driver.js'
@@ -366,6 +367,18 @@ export class BrowserSession implements PageOpsHost {
     // SANITIZED (home redacted) and never carries secrets; a persistent lock
     // conflict's `degraded` flag is surfaced so the agent knows the run fell
     // back to an isolated session.
+    // Vision routing diagnostics: report the effective provider + whether the
+    // route is usable, so the agent sees WHY vision may be off instead of a bare
+    // `vision-unavailable`. Only config/env drive this (no API-key probe), so it
+    // is always safe to surface.
+    const provider = resolveProvider(this.config.visionMode === 'deepseek-file-api', this.env.providerOverride)
+    const route = resolveRoute(provider, { baseUrl: this.env.baseUrlOverride, model: this.env.modelOverride })
+    const cap = detectCapability(provider, route.defaultModel, this.config.providers)
+    const missingBaseUrl = !hasRoutableBaseUrl(provider, this.env.baseUrlOverride)
+    const visionReason = missingBaseUrl
+      ? 'missing-dsh-tui-browser-base-url'
+      : (!cap.supportsVision ? 'provider-not-vision-capable' : undefined)
+
     return {
       available,
       version,
@@ -375,6 +388,13 @@ export class BrowserSession implements PageOpsHost {
         profile: this.sessionPaths.profileName,
         profileDir: sanitizePath(this.sessionPaths.profileDir) ?? null,
         degraded: this.degraded,
+      },
+      vision: {
+        mode: this.config.visionMode,
+        provider,
+        model: route.defaultModel,
+        available: cap.supportsVision && !missingBaseUrl,
+        ...(visionReason ? { reason: visionReason } : {}),
       },
     }
   }

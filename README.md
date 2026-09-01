@@ -119,7 +119,7 @@ Playwright 截图
 ```sh
 npm run build           # tsc → lib/types/
 npm run check           # CI 门禁：build + smoke(21 tools) + manifest + i18n + router
-npm run test:logic      # 18 个纯逻辑回归（无需浏览器/key；含会话档案/启动失败锁释放/快照 delta/驱动契约/密钥探测/运行时环境等）
+npm run test:logic      # 19 个纯逻辑回归（无需浏览器/key；含会话档案/启动失败锁释放/快照 delta/驱动契约/密钥探测/运行时环境/provider 路由守卫等）
 npm run test:container  # stub harness 加载产物 + 真实启动浏览器（21 工具注册）
 npm run test:integration # 真实浏览器集成（导航/点击/输入/截图/切分/快照）
 npm run test:storage-state # storageState 损坏回退 + persistent 导入（真实浏览器）

@@ -27,7 +27,8 @@ import type {
 import { t, type Lang } from './i18n.js'
 import { prepareScreenshot } from './image-pipeline.js'
 import { validateJsonSchema, parseJsonReply, type SchemaNode } from './schema-validate.js'
-import { effectiveViewport } from './capabilities.js'
+import { effectiveViewport, detectCapability } from './capabilities.js'
+import { resolveProvider, resolveRoute, hasRoutableBaseUrl } from './provider-router.js'
 import type { RuntimeEnv } from './runtime-env.js'
 
 /** The runtime dependencies a tool needs when it executes. */
@@ -305,6 +306,31 @@ async function visionEnvOrNull(deps: ToolDeps): Promise<VisionEnv | null> {
 }
 
 /**
+ * Compute a SPECIFIC vision-degradation reason from sync deps only (no API-key
+ * probe). When `resolveVisionEnv()` already returned null, this names the most
+ * actionable cause so the agent (and user) can fix it instead of guessing:
+ *   - `vision-off`            → visionMode is off (explicit).
+ *   - `missing-dsh-tui-browser-base-url` → a non-deepseek/non-openai provider
+ *     was selected without the required `DSH_TUI_BROWSER_BASE_URL`; the route
+ *     would silently land on OpenAI, so it is blocked (AGENTS.md §6).
+ *   - `provider-not-vision-capable` → provider+model don't accept images
+ *     (e.g. a text-only deepseek-v4-flash), so it short-circuits to DOM.
+ *   - `undefined`             → the async case (key missing / transport): keep
+ *     the generic `vision-unavailable`.
+ */
+function knownVisionUnavailableReason(deps: ToolDeps): string | undefined {
+  const mode = deps.visionMode()
+  if (mode === 'off') return 'vision-off'
+  const provider = resolveProvider(mode === 'deepseek-file-api', deps.runtimeEnv.providerOverride)
+  const route = resolveRoute(provider, { baseUrl: deps.runtimeEnv.baseUrlOverride, model: deps.runtimeEnv.modelOverride })
+  const cap = detectCapability(provider, route.defaultModel, deps.session.config.providers)
+  const missingBaseUrl = !hasRoutableBaseUrl(provider, deps.runtimeEnv.baseUrlOverride)
+  if (missingBaseUrl) return 'missing-dsh-tui-browser-base-url'
+  if (!cap.supportsVision) return 'provider-not-vision-capable'
+  return undefined
+}
+
+/**
  * Run one vision extract with validate-on-failure retry (≤2 retries, P0-4).
  *
  * Each retry appends the concrete violation/parse error so the model can
@@ -404,7 +430,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
               elementSummary: '',
               fileId: '',
               visionUsed: false,
-              visionUnavailableReason: deps.visionMode() === 'off' ? 'vision-off' : 'vision-unavailable',
+              visionUnavailableReason: knownVisionUnavailableReason(deps) ?? 'vision-unavailable',
               tilesTotal: 0,
               tilesCaptured: 0,
               tilesTruncated: false,
@@ -444,7 +470,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
             // Surface why vision was skipped on the savePath branch too (H-04),
             // so the field is present whenever `visionUsed` is false, not only
             // on the no-savePath short-circuit.
-            visionUnavailableReason: visionActive ? undefined : (deps.visionMode() === 'off' ? 'vision-off' : 'vision-unavailable'),
+            visionUnavailableReason: visionActive ? undefined : (knownVisionUnavailableReason(deps) ?? 'vision-unavailable'),
             tilesTotal: cap.segmentsTotal,
             tilesCaptured: cap.captured,
             tilesTruncated: cap.truncated,

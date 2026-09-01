@@ -425,6 +425,20 @@ export interface TaskResult {
   cost: { usd: number; cny: number }
 }
 
+/** Routing diagnostics surfaced by `browser_status` so the agent can see WHY
+ * vision may be off (e.g. a configured provider needs an explicit base URL). */
+export interface StatusVision {
+  mode: VisionMode
+  /** Effective provider id after route resolution (e.g. `deepseek`, `anthropic`). */
+  provider: string
+  /** Resolved vision model id ('' when undetermined). */
+  model: string
+  /** Whether the vision path is currently usable (no API-key probe). */
+  available: boolean
+  /** Machine-readable reason when `available` is false. */
+  reason?: 'missing-dsh-tui-browser-base-url' | 'provider-not-vision-capable'
+}
+
 /** `browser.status` result. */
 export interface StatusResult {
   available: boolean
@@ -439,6 +453,8 @@ export interface StatusResult {
     /** Whether a persistent lock conflict degraded this run to an isolated session. */
     degraded: boolean
   }
+  /** Vision routing diagnostics (resolved provider + why vision may be off). */
+  vision?: StatusVision
 }
 
 /** One interactive/semantic element in the a11y snapshot index. */

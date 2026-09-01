@@ -118,7 +118,7 @@ Playwright screenshot
 ```sh
 npm run build           # tsc → lib/types/
 npm run check           # CI gate: build + smoke(21 tools) + manifest + i18n + router
-npm run test:logic      # 18 pure-logic regression suites (no browser/key)
+npm run test:logic      # 19 pure-logic regression suites (no browser/key)
 npm run test:container  # stub harness loads the artifact + real browser boot (21 tools)
 npm run test:integration # live browser integration (navigate/click/type/screenshot/tiling/snapshot)
 npm run test:storage-state # storageState corruption fallback + persistent import (live browser)

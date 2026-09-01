@@ -20,7 +20,7 @@ import Schema from '@deepseek-ai/schemastery'
 import { BrowserSession } from './browser.js'
 import { registerTools } from './tools/registry.js'
 import { registerSettingsSection } from './settings-section.js'
-import { resolveProvider, resolveRoute } from './provider-router.js'
+import { resolveProvider, resolveRoute, hasRoutableBaseUrl } from './provider-router.js'
 import { detectCapability } from './capabilities.js'
 import { loadRuntimeEnv } from './runtime-env.js'
 import { probeSecretAsync } from './secret-probe.js'
@@ -252,7 +252,7 @@ export function apply(ctx: Context, config: Config): void {
     // foreign model (claude/gemini/custom) to OpenAI with the OpenAI key — the
     // exact "send the wrong credentials/model to a foreign endpoint" the
     // contract forbids (AGENTS.md §6). Degrade to DOM rather than misroute.
-    if (provider !== 'deepseek' && provider !== 'openai' && !runtimeEnv.baseUrlOverride) {
+    if (!hasRoutableBaseUrl(provider, runtimeEnv.baseUrlOverride)) {
       return null
     }
 

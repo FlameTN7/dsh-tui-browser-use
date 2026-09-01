@@ -90,6 +90,19 @@ export function resolveRoute(provider: string, overrides?: { baseUrl?: string; m
   return { provider, baseURL, apiKeyEnv, defaultModel: model, api }
 }
 
+/**
+ * Whether a provider route has a routable base URL without an explicit
+ * override. Only the built-in `deepseek` route and the `openai` OpenAI-
+ * compatible default have an endpoint of their own. Any other provider
+ * (anthropic/google/custom) MUST supply an explicit `DSH_TUI_BROWSER_BASE_URL`,
+ * otherwise defaulting to OpenAI's endpoint would silently misroute a foreign
+ * model there with the OpenAI key (AGENTS.md §6). The runtime guard in
+ * `index.ts#resolveVisionEnv` short-circuits on `false` and degrades to DOM.
+ */
+export function hasRoutableBaseUrl(provider: string, baseUrlOverride: string | undefined): boolean {
+  return provider === 'deepseek' || provider === 'openai' || Boolean(baseUrlOverride)
+}
+
 /** Resolve the transfer mode for a provider (env override wins over base route). */
 export function resolveTransfer(provider: string, forceFileApi: boolean): ImageTransfer {
   if (forceFileApi) return 'file'
