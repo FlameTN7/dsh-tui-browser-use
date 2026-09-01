@@ -42,44 +42,56 @@ export interface Config extends BrowserUseConfig {
   lang: 'zh' | 'en'
 }
 
+/**
+ * Shared browser-use config schema fields (the plugin `Config` and the
+ * `browser-use` settings namespace differ only by `lang`). Extracted as a
+ * single factory so the two can never drift — a new config field added here
+ * is automatically visible in BOTH the Cordis patch config and /settings.
+ */
+function browserUseSchemaFields() {
+  return {
+    visionMode: Schema.union(['auto', 'on', 'off', 'deepseek-file-api'] as const).default('auto'),
+    // Real viewport (CSS px). `screenshot.maxDimension` remains as a deprecated
+    // back-compat alias for the same thing (P0-03).
+    viewport: Schema.object({
+      width: Schema.number().min(1).default(1024),
+      height: Schema.number().min(1).default(768),
+    }).required(false),
+    screenshot: Schema.object({
+      format: Schema.union(['jpeg', 'png'] as const).default('jpeg'),
+      quality: Schema.number().min(1).max(100).default(80),
+      maxDimension: Schema.string().required(false),
+    }),
+    tiling: Schema.object({
+      mode: Schema.union(['auto', 'on', 'off'] as const).default('auto'),
+      threshold: Schema.string().default('1200x1200'),
+      overlap: Schema.number().min(0).default(60),
+      maxTiles: Schema.number().min(1).default(24),
+    }),
+    providers: Schema.array(Schema.object({
+      provider: Schema.string().required(),
+      supportsVision: Schema.boolean().default(false),
+      imageTransfer: Schema.union(['file', 'base64', 'url', 'none'] as const).default('none'),
+      maxImageBytes: Schema.number().required(false),
+      detailPreference: Schema.union(['high', 'auto'] as const).required(false),
+    })).default([]),
+    // Optional HTTP proxy for external sites. Empty falls back to the
+    // `DSH_TUI_BROWSER_PROXY` env var at browser startup.
+    proxy: Schema.string().required(false),
+    // Session/profile management (Phase 3). Optional and absent by default, so
+    // existing deployments keep the historical fresh-session behaviour. When set,
+    // `mode` picks a managed profile; `profile` names the directory under the
+    // profile root (validated as one safe path segment).
+    session: Schema.object({
+      mode: Schema.union(['persistent', 'isolated'] as const).default('isolated'),
+      profile: Schema.string().default('default'),
+    }).required(false),
+  }
+}
+
 export const Config: Schema<Config> = Schema.object({
   lang: Schema.union(['zh', 'en'] as const).default('zh'),
-  visionMode: Schema.union(['auto', 'on', 'off', 'deepseek-file-api'] as const).default('auto'),
-  // Real viewport (CSS px). `screenshot.maxDimension` remains as a deprecated
-  // back-compat alias for the same thing (P0-03).
-  viewport: Schema.object({
-    width: Schema.number().min(1).default(1024),
-    height: Schema.number().min(1).default(768),
-  }).required(false),
-  screenshot: Schema.object({
-    format: Schema.union(['jpeg', 'png'] as const).default('jpeg'),
-    quality: Schema.number().min(1).max(100).default(80),
-    maxDimension: Schema.string().required(false),
-  }),
-  tiling: Schema.object({
-    mode: Schema.union(['auto', 'on', 'off'] as const).default('auto'),
-    threshold: Schema.string().default('1200x1200'),
-    overlap: Schema.number().min(0).default(60),
-    maxTiles: Schema.number().min(1).default(24),
-  }),
-  providers: Schema.array(Schema.object({
-    provider: Schema.string().required(),
-    supportsVision: Schema.boolean().default(false),
-    imageTransfer: Schema.union(['file', 'base64', 'url', 'none'] as const).default('none'),
-    maxImageBytes: Schema.number().required(false),
-    detailPreference: Schema.union(['high', 'auto'] as const).required(false),
-  })).default([]),
-  // Optional HTTP proxy for external sites. Empty falls back to the
-  // `DSH_TUI_BROWSER_PROXY` env var at browser startup.
-  proxy: Schema.string().required(false),
-  // Session/profile management (Phase 3). Optional and absent by default, so
-  // existing deployments keep the historical fresh-session behaviour. When set,
-  // `mode` picks a managed profile; `profile` names the directory under the
-  // profile root (validated as one safe path segment).
-  session: Schema.object({
-    mode: Schema.union(['persistent', 'isolated'] as const).default('isolated'),
-    profile: Schema.string().default('default'),
-  }).required(false),
+  ...browserUseSchemaFields(),
 })
 
 /**
@@ -87,36 +99,7 @@ export const Config: Schema<Config> = Schema.object({
  * section renders). It mirrors the plugin Config minus `lang`, so the settings
  * screen can persist/stage edits to the same fields the plugin reads.
  */
-const settingsNamespaceSchema = Schema.object({
-  visionMode: Schema.union(['auto', 'on', 'off', 'deepseek-file-api'] as const).default('auto'),
-  viewport: Schema.object({
-    width: Schema.number().min(1).default(1024),
-    height: Schema.number().min(1).default(768),
-  }).required(false),
-  screenshot: Schema.object({
-    format: Schema.union(['jpeg', 'png'] as const).default('jpeg'),
-    quality: Schema.number().min(1).max(100).default(80),
-    maxDimension: Schema.string().required(false),
-  }),
-  tiling: Schema.object({
-    mode: Schema.union(['auto', 'on', 'off'] as const).default('auto'),
-    threshold: Schema.string().default('1200x1200'),
-    overlap: Schema.number().min(0).default(60),
-    maxTiles: Schema.number().min(1).default(24),
-  }),
-  providers: Schema.array(Schema.object({
-    provider: Schema.string().required(),
-    supportsVision: Schema.boolean().default(false),
-    imageTransfer: Schema.union(['file', 'base64', 'url', 'none'] as const).default('none'),
-    maxImageBytes: Schema.number().required(false),
-    detailPreference: Schema.union(['high', 'auto'] as const).required(false),
-  })).default([]),
-  proxy: Schema.string().required(false),
-  session: Schema.object({
-    mode: Schema.union(['persistent', 'isolated'] as const).default('isolated'),
-    profile: Schema.string().default('default'),
-  }).required(false),
-})
+const settingsNamespaceSchema = Schema.object(browserUseSchemaFields())
 
 // ── Harness access helpers (structural, never self-manage secrets) ──────
 
@@ -291,7 +274,6 @@ export function apply(ctx: Context, config: Config): void {
       model: currentModel,
       imageTransfer,
       provider,
-      currentModel,
       ...(capability.maxImageBytes !== undefined ? { maxImageBytes: capability.maxImageBytes } : {}),
     }
   }

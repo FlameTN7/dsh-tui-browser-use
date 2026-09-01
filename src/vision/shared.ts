@@ -17,7 +17,6 @@ export interface VisionEnvLike {
   model: string
   imageTransfer: ImageTransfer
   provider: string
-  currentModel: string
 }
 
 // ── Retry policy ─────────────────────────────────────────────────────────

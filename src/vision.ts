@@ -32,8 +32,6 @@ export interface VisionEnv {
   imageTransfer: ImageTransfer
   /** The provider name (for capability fallback + diagnostics). */
   provider: string
-  /** Current model route name. */
-  currentModel: string
   /** Override for the capture byte budget (from providers[].maxImageBytes). */
   maxImageBytes?: number
 }
