@@ -94,7 +94,8 @@ Common settings can also be overridden via environment variables; some take effe
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `DSH_TUI_BROWSER_PROVIDER` / `_MODEL` / `_BASE_URL` + `OPENAI_API_KEY` | Switch to an OpenAI-compatible vision route (non-DeepSeek endpoint) | Built-in `deepseek` route |
+| `DSH_TUI_BROWSER_PROVIDER` / `_MODEL` + `OPENAI_API_KEY` | Switch to an OpenAI-compatible vision route (non-DeepSeek endpoint) | Built-in `deepseek` route |
+| `DSH_TUI_BROWSER_BASE_URL` | Required endpoint for a non-DeepSeek/non-OpenAI provider (e.g. an Anthropic/Gemini gateway). Without it such providers degrade to pure DOM rather than being misrouted to OpenAI | Built-in `deepseek`/`openai` endpoints |
 | `DSH_TUI_BROWSER_DIALOG` | Dialog policy `dismiss` / `accept` / `ignore` | `dismiss` |
 | `DSH_TUI_BROWSER_ENGINE` | Browser engine `chromium` / `firefox` / `webkit` | `chromium` |
 | `DSH_TUI_BROWSER_PROXY` / `_PROXY_BYPASS` | Outbound proxy (read at browser startup) | none |
@@ -127,11 +128,11 @@ npm run test:storage-state # storageState corruption fallback + persistent impor
 
 The plugin exposes a small programming surface so a host or third party can drive the browser or swap a backend without touching the tool registries.
 
-- **Browser backend**: `BrowserSession` is constructed with a `BrowserDriver` (default `PlaywrightDriver`). The driver is the **launch/lifecycle seam** (`start`/`close`/`settleStable` + `page`/`context`). Navigation/click/screenshot currently still drive the structural Playwright `page` surface directly (honestly labelled a "launcher abstraction", see `docs/验收记录.md` P2-1); a full backend swap is future work. See the contract at `dsh-tui-browser-use/driver`.
+- **Browser backend**: `BrowserSession` is constructed with a `BrowserDriver` (default `PlaywrightDriver`). The seam is a **full backend abstraction**: it is the sole Playwright boundary, owning launch/close and page settling (`settleStable`), and it collapses all page operations — navigation, interaction, screenshot, PDF, download, cookies — into semantic methods (`goto`/`goBack`/`click`/`fill`/`evaluate`/`screenshot`/`pdf`/`requestGet`…). `BrowserSession`/page-ops drive the browser only through it and never see a raw `page`/`context` handle — so a non-Playwright backend can be swapped in wholesale. `dsh-tui-browser-use/driver` exports both the `BrowserDriver` contract and the `createPlaywrightDriver()` default implementation; to swap backends, inject a custom driver satisfying that contract.
 - **Vision transport**: `createVisionAdapter(env, runtimeEnv)` returns the adapter for the resolved image-transfer mode (`file` → DeepSeek Files-API; `base64`/`url` → OpenAI-compatible inline). Swappable at `dsh-tui-browser-use/vision`.
 - **Tool registration**: `buildToolDefinitions(deps)` / `registerTools(ctx, deps)` registries accept an injected session + vision resolver, so a host can wrap or extend them.
 
-Subpath exports: `dsh-tui-browser-use/driver`, `dsh-tui-browser-use/vision`, `dsh-tui-browser-use/types`. The tool count and the unified result envelope (`{ ok, value|error, usage? }`) are part of the contract and must not change.
+Subpath exports: `dsh-tui-browser-use/driver` (`BrowserDriver` contract + `createPlaywrightDriver()`), `dsh-tui-browser-use/vision` (`createVisionAdapter`), `dsh-tui-browser-use/types`. The tool count and the unified result envelope (`{ ok, value|error, usage? }`) are part of the contract and must not change.
 
 ## Known limitations
 

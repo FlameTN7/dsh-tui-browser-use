@@ -4,16 +4,14 @@
  * Pure, Playwright-agnostic helpers shared by the browser session orchestration
  * (browser.ts) and the page-operations class (page-ops.ts). These carry no
  * session state and never reach into the harness; they are the single source of
- * truth for the abort-shot-circuit race, the frame-aware locator resolution,
- * the capture-time JPEG quality staircase, and the sensitive-data redaction
- * (URL/cookie). Keeping them here (rather than on `BrowserSession`) means both
- * the orchestrator and the page-ops layer share the SAME shapes, and the
- * module stays free of a hard runtime dependency on the playwright type package
- * (AGENTS.md §2).
+ * truth for the abort-shot-circuit race, the capture-time JPEG quality staircase,
+ * and the sensitive-data redaction (URL/cookie). Frame-aware locator resolution
+ * and capture live inside the `BrowserDriver` (the sole Playwright boundary), so
+ * this module stays free of a hard runtime dependency on the playwright type
+ * package (AGENTS.md §2).
  */
 
 import type { ErrorCode } from './types.js'
-import type { PwPage, PwFrame, PwLocator } from './driver/browser-driver.js'
 import { DEFAULT_SENSITIVE_QUERY_KEYS } from './runtime-env.js'
 
 /**
@@ -48,75 +46,6 @@ export function raceAbort<T>(p: Promise<T>, signal: AbortSignal | undefined, mes
 }
 
 /**
- * Wait for a dynamically-rendered target (SPA / lazy content) to be actionable
- * before an interaction. Retries a few times because a click/type on an element
- * that is attached but still animating can miss. Mirrors browser-use's
- * `_wait_for_minimum_elements` + Playwright MCP's `--timeout-action`.
- */
-export async function waitForLocator(locator: PwLocator, timeoutMs = 6000): Promise<void> {
-  // `waitFor` starts from the current DOM; it does not re-query after a first
-  // failed attempt, so cap each try and retry a few times.
-  const perTry = Math.max(800, Math.min(3000, Math.round(timeoutMs / 3)))
-  for (let i = 0; i < 3; i += 1) {
-    try {
-      await locator.first().waitFor({ state: 'visible', timeout: perTry })
-      return
-    } catch { /* re-query next attempt */ }
-  }
-  // Final attempt surfaces the error (so the caller gets a useful message).
-  await locator.first().waitFor({ state: 'visible', timeout: perTry })
-}
-
-/**
- * Resolve a locator from a caller-provided selector/text, honoring Playwright's
- * richer query strategies in addition to CSS:
- *   - `text=` / visible-text match (used by `browser_click({ text })`)
- *   - `role=button[name=x]` / ARIA role match
- *   - plain CSS selector (used by `browser_type({ selector })`)
- * Prefers the semantically-stable text/role match over brittle CSS class chains
- * (dynamic sites compile/hash their class names; accessible names do not).
- */
-export function resolveLocator(target: PwPage | PwFrame, selector?: string, text?: string): PwLocator {
-  if (text !== undefined && text.length > 0) {
-    return target.getByText(text)
-  }
-  if (selector && /^role=/.test(selector)) {
-    const m = /^role=([a-z]+)(?:\[name=(.+)\])?/i.exec(selector)
-    if (m?.[1]) return target.getByRole(m[1], m[2] !== undefined ? { name: m[2] } : undefined)
-  }
-  if (selector && /^label=/.test(selector)) {
-    return target.getByLabel(selector.slice('label='.length))
-  }
-  return target.locator(selector ?? '')
-}
-
-/**
- * Resolve an actionable locator across the page and its child frames. Tries the
- * main frame first, then each `page.frames()` (iframe), so a selector/text that
- * lives inside an embedded frame is still found. Uses `count()` (async) to pick
- * the first candidate that actually matches, rather than assuming a frame owns
- * the target. Returns the main-frame locator as a fallback.
- */
-export async function resolveFrameAware(page: PwPage, selector?: string, text?: string): Promise<PwLocator> {
-  const main = resolveLocator(page, selector, text)
-  // Count is async, but a bare empty selector is never actionable.
-  if (selector === undefined && text === undefined) return main
-  try {
-    const mainCount = await main.count()
-    if (mainCount > 0) return main
-  } catch { /* ignore and fall through to frames */ }
-  const frames = page.frames()
-  for (const frame of frames) {
-    const loc = resolveLocator(frame, selector, text)
-    try {
-      const n = await loc.count()
-      if (n > 0) return loc
-    } catch { /* try next frame */ }
-  }
-  return main
-}
-
-/**
  * Split a save path into its directory, a "stem" (basename minus one final
  * extension), and that extension (with the leading dot, e.g. `.jpg`; empty
  * string when the path is extensionless). Unlike a bare `lastIndexOf('.')`,
@@ -139,29 +68,6 @@ export function jpegQualitySteps(base: number): number[] {
   const b = Number.isFinite(base) && base > 0 ? base : 80
   const steps = [b, 60, 40].filter((q) => q >= 40 && q <= b)
   return Array.from(new Set(steps)).sort((x, y) => y - x)
-}
-
-/**
- * Capture a screenshot and, for JPEG, drop the quality until the payload fits
- * the byte budget (the "capture-time compression" from proposal §5.3). PNG is
- * never re-encoded — it's captured once and the pipeline marks it `oversize`.
- */
-export async function captureWithBudget(
-  page: PwPage,
-  type: string,
-  quality: number | undefined,
-  maxImageBytes: number,
-): Promise<Buffer> {
-  if (type !== 'jpeg') {
-    return page.screenshot({ type, quality: undefined })
-  }
-  const steps = jpegQualitySteps(quality ?? 80)
-  let last: Buffer | null = null
-  for (const q of steps) {
-    last = await page.screenshot({ type, quality: q })
-    if (last.length <= maxImageBytes) return last
-  }
-  return last ?? (await page.screenshot({ type, quality }))
 }
 
 /**

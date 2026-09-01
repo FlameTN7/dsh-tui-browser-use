@@ -3,14 +3,13 @@
  *
  * Splits `BrowserSession` so the class is a thin orchestrator (serial mutex,
  * launch/lifecycle, console/network ring buffers, status) while the page-driving
- * work lives here. Every method delegates to the live `page`/`context` exposed
+ * work lives here. Every method delegates to the {@link BrowserDriver} exposed
  * via the {@link PageOpsHost}, so no Playwright state is duplicated and the
- * plugin keeps its structural typing (AGENTS.md §2).
- *
- * The host supplies the effective config/env/timeouts and the live browser
- * handles; page-ops owns the "what to do on a page" logic (navigate, interact,
- * scroll, capture, snapshot, download) that the session funnels through its
- * serial `run()` queue.
+ * plugin keeps its structural typing (AGENTS.md §2). The driver is the SOLE
+ * Playwright boundary: page-ops never touches a raw `page`/`context` handle —
+ * it calls semantic driver primitives (navigate/interact/observe) and owns the
+ * orchestration logic (settle, snapshot-delta, tiling math, saveScreenshots,
+ * sanitize, error envelope).
  */
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
@@ -22,11 +21,8 @@ import { DEFAULT_MAX_IMAGE_BYTES } from './image-pipeline.js'
 import { requestUrl, displayUrl } from './download-url.js'
 import {
   throwIfAborted,
-  raceAbort,
-  waitForLocator,
-  resolveFrameAware,
   splitSaveStem,
-  captureWithBudget,
+  jpegQualitySteps,
   sanitizeUrl,
   cookieValue,
   BrowserToolError,
@@ -63,14 +59,10 @@ import type {
   CaptureSegmentsResult,
 } from './types.js'
 import type { RuntimeEnv } from './runtime-env.js'
-import type { BrowserDriver, PwPage, PwContext } from './driver/browser-driver.js'
+import type { BrowserDriver, DriverNavResult } from './driver/browser-driver.js'
 
 /** The slice of `BrowserSession` state the page ops layer reads. */
 export interface PageOpsHost {
-  /** The live page (null until `ensureStarted` succeeds). */
-  readonly page: PwPage | null
-  /** The live context (null until `ensureStarted` succeeds). */
-  readonly ctx: PwContext | null
   /** The reason `start` returned false (for a graceful `browser-error`). */
   readonly startError: string | null
   readonly env: RuntimeEnv
@@ -84,18 +76,25 @@ export interface PageOpsHost {
   ensureStarted(): Promise<boolean>
 }
 
-/** The page-driving operations that operate on the live browser handles. */
+/** The page-driving operations that operate through the injected driver. */
 export class PageOps {
   constructor(private readonly host: PageOpsHost) {}
 
-  private requirePage(): PwPage {
-    if (!this.host.page) throw new BrowserToolError('browser-error', t('error.browser', this.host.lang, { message: 'browser not started' }))
-    return this.host.page
-  }
-
-  private requireContext(): PwContext {
-    if (!this.host.ctx) throw new BrowserToolError('browser-error', t('error.browser', this.host.lang, { message: 'browser context not started' }))
-    return this.host.ctx
+  /**
+   * Capture a screenshot, dropping JPEG quality until the payload fits the byte
+   * budget (capture-time compression, proposal §5.3). PNG is captured once and
+   * the pipeline marks it `oversize`. The driver exposes a single `screenshot`
+   * primitive; the budget loop is orchestration policy, so it lives here.
+   */
+  private async captureWithBudget(type: string, quality: number | undefined, maxImageBytes: number): Promise<Buffer> {
+    if (type !== 'jpeg') return this.host.driver.screenshot({ type, quality: undefined })
+    const steps = jpegQualitySteps(quality ?? 80)
+    let last: Buffer | null = null
+    for (const q of steps) {
+      last = await this.host.driver.screenshot({ type, quality: q })
+      if (last.length <= maxImageBytes) return last
+    }
+    return last ?? (await this.host.driver.screenshot({ type, quality }))
   }
 
   /**
@@ -126,7 +125,6 @@ export class PageOps {
   async navigate(params: NavigateParams, signal?: AbortSignal): Promise<NavigateResult> {
     throwIfAborted(signal)
     if (!(await this.host.ensureStarted())) throw new BrowserToolError('browser-error', this.host.startError ?? 'browser unavailable')
-    const page = this.requirePage()
     try {
       // Use `domcontentloaded` rather than `load`: many real external pages
       // (duckduckgo, wikipedia) keep running scripts so a `load` event can be
@@ -134,16 +132,16 @@ export class PageOps {
       // and interact; the follow-up `waitForLoadState('load')` is best-effort and
       // never blocks a successful navigate.
       throwIfAborted(signal)
-      const resp = await raceAbort(page.goto(params.url, { waitUntil: 'domcontentloaded', timeout: this.host.navTimeoutMs }), signal)
-      await page.waitForLoadState('load').catch(() => undefined)
+      const resp = await this.host.driver.goto(params.url, { timeout: this.host.navTimeoutMs, signal })
+      await this.host.driver.waitForLoadState('load')
       // Let the layout settle rather than racing a still-parsing document.
       await this.settlePage()
       return {
-        title: await page.title(),
+        title: await this.host.driver.title(),
         // R-11: sanitize the resolved URL so a signed/token-carrying redirect
         // target never leaks into the model context.
-        url: sanitizeUrl(resp?.url() ?? params.url, this.host.env.sensitiveQueryKeys),
-        status: resp?.status() ?? null,
+        url: sanitizeUrl(resp.url, this.host.env.sensitiveQueryKeys),
+        status: resp.status,
       }
     } catch (err) {
       // Preserve a canonical tool error (e.g. B8 `timed-out`) — only wrap
@@ -157,22 +155,18 @@ export class PageOps {
   async click(params: ClickParams, signal?: AbortSignal): Promise<ClickResult> {
     throwIfAborted(signal)
     if (!(await this.host.ensureStarted())) throw new BrowserToolError('browser-error', this.host.startError ?? 'browser unavailable')
-    const page = this.requirePage()
-    const before = page.url()
+    const before = this.host.driver.currentUrl()
     const wantDelta = params.delta === true
     if (wantDelta) await this.setSnapshotBaseline()
     try {
       // `text` (visible text) wins over `selector` (CSS); a bare selector keeps
-      // using the CSS path. Searches main frame then child frames (iframe).
-      // Wait for the target to be actionable (SPA/lazy).
+      // using the CSS path. The driver encapsulates the frame-aware lookup and
+      // the wait-for-actionable step (SPA/lazy).
       throwIfAborted(signal)
-      const locator = await resolveFrameAware(page, params.selector, params.text)
-      await waitForLocator(locator, this.host.actionTimeoutMs)
-      throwIfAborted(signal)
-      await locator.first().click({ timeout: this.host.actionTimeoutMs })
-      await page.waitForLoadState('load').catch(() => undefined)
+      await this.host.driver.click(params.selector, params.text, { timeout: this.host.actionTimeoutMs })
+      await this.host.driver.waitForLoadState('load')
       await this.settlePage()
-      const result: ClickResult = { success: true, newUrl: sanitizeUrl(page.url() || before, this.host.env.sensitiveQueryKeys) }
+      const result: ClickResult = { success: true, newUrl: sanitizeUrl(this.host.driver.currentUrl() || before, this.host.env.sensitiveQueryKeys) }
       if (wantDelta) { const d = await this.readSnapshotDelta(); if (d) result.delta = d }
       return result
     } catch (err) {
@@ -187,24 +181,17 @@ export class PageOps {
   async type(params: TypeParams, signal?: AbortSignal): Promise<TypeResult> {
     throwIfAborted(signal)
     if (!(await this.host.ensureStarted())) throw new BrowserToolError('browser-error', this.host.startError ?? 'browser unavailable')
-    const page = this.requirePage()
     const wantDelta = params.delta === true
     if (wantDelta) await this.setSnapshotBaseline()
     try {
-      // `type` uses a CSS selector (the caller queries the field). Search main
-      // frame then child frames, and wait for the input before filling so a SPA
-      // that mounts its form late doesn't miss.
+      // `type` uses a CSS selector (the caller queries the field). The driver
+      // waits for the input before filling so a SPA that mounts its form late
+      // doesn't miss.
       throwIfAborted(signal)
-      const locator = await resolveFrameAware(page, params.selector, undefined)
-      await waitForLocator(locator, this.host.actionTimeoutMs)
-      throwIfAborted(signal)
-      const field = locator.first()
-      if (params.clear) await field.clear({ timeout: this.host.actionTimeoutMs }).catch(() => undefined)
-      await field.fill(params.text, { timeout: this.host.actionTimeoutMs })
-      // Optional trailing keypress (e.g. `Enter` to submit a form) — requires a
-      // focused page, which Playwright keeps after fill.
+      await this.host.driver.fill(params.selector, params.text, { timeout: this.host.actionTimeoutMs, clear: params.clear })
+      // Optional trailing keypress (e.g. `Enter` to submit a form).
       if (params.enter) {
-        try { await page.keyboard.press(params.enter) } catch { /* key may be unsupported; ignore */ }
+        try { await this.host.driver.press(params.enter) } catch { /* key may be unsupported; ignore */ }
       }
       await this.settlePage()
       const result: TypeResult = { success: true }
@@ -220,21 +207,19 @@ export class PageOps {
   }
 
   /** Shared post-navigation settle used by back/forward/reload. */
-  private async navSettle(resp: { status(): number | null; url(): string } | null, fallbackUrl: string): Promise<NavigateResult> {
-    const page = this.requirePage()
-    await page.waitForLoadState('load').catch(() => undefined)
+  private async navSettle(resp: DriverNavResult, fallbackUrl: string): Promise<NavigateResult> {
+    await this.host.driver.waitForLoadState('load')
     await this.settlePage()
-    return { title: await page.title(), url: sanitizeUrl(resp?.url() ?? fallbackUrl, this.host.env.sensitiveQueryKeys), status: resp?.status() ?? null }
+    return { title: await this.host.driver.title(), url: sanitizeUrl(resp.url || fallbackUrl, this.host.env.sensitiveQueryKeys), status: resp.status }
   }
 
   async back(signal?: AbortSignal): Promise<NavigateResult> {
     throwIfAborted(signal)
     if (!(await this.host.ensureStarted())) throw new BrowserToolError('browser-error', this.host.startError ?? 'browser unavailable')
-    const page = this.requirePage()
     try {
-      const before = page.url()
+      const before = this.host.driver.currentUrl()
       throwIfAborted(signal)
-      const resp = await raceAbort(page.goBack({ waitUntil: 'domcontentloaded', timeout: this.host.navTimeoutMs }), signal)
+      const resp = await this.host.driver.goBack({ timeout: this.host.navTimeoutMs, signal })
       return await this.navSettle(resp, before)
     } catch (err) {
       // Preserve a canonical tool error (e.g. B8 `timed-out`) — only wrap
@@ -248,11 +233,10 @@ export class PageOps {
   async forward(signal?: AbortSignal): Promise<NavigateResult> {
     throwIfAborted(signal)
     if (!(await this.host.ensureStarted())) throw new BrowserToolError('browser-error', this.host.startError ?? 'browser unavailable')
-    const page = this.requirePage()
     try {
-      const before = page.url()
+      const before = this.host.driver.currentUrl()
       throwIfAborted(signal)
-      const resp = await raceAbort(page.goForward({ waitUntil: 'domcontentloaded', timeout: this.host.navTimeoutMs }), signal)
+      const resp = await this.host.driver.goForward({ timeout: this.host.navTimeoutMs, signal })
       return await this.navSettle(resp, before)
     } catch (err) {
       // Preserve a canonical tool error (e.g. B8 `timed-out`) — only wrap
@@ -266,11 +250,10 @@ export class PageOps {
   async reload(signal?: AbortSignal): Promise<NavigateResult> {
     throwIfAborted(signal)
     if (!(await this.host.ensureStarted())) throw new BrowserToolError('browser-error', this.host.startError ?? 'browser unavailable')
-    const page = this.requirePage()
     try {
-      const before = page.url()
+      const before = this.host.driver.currentUrl()
       throwIfAborted(signal)
-      const resp = await raceAbort(page.reload({ waitUntil: 'domcontentloaded', timeout: this.host.navTimeoutMs }), signal)
+      const resp = await this.host.driver.reload({ timeout: this.host.navTimeoutMs, signal })
       return await this.navSettle(resp, before)
     } catch (err) {
       // Preserve a canonical tool error (e.g. B8 `timed-out`) — only wrap
@@ -284,16 +267,15 @@ export class PageOps {
   async scroll(params: ScrollParams, signal?: AbortSignal): Promise<ScrollResult> {
     throwIfAborted(signal)
     if (!(await this.host.ensureStarted())) throw new BrowserToolError('browser-error', this.host.startError ?? 'browser unavailable')
-    const page = this.requirePage()
     const x = Math.trunc(Number(params.x) || 0)
     const y = Math.trunc(Number(params.y) || 0)
     const wantDelta = params.delta === true
     if (wantDelta) await this.setSnapshotBaseline()
     try {
       throwIfAborted(signal)
-      await page.evaluate(`window.scrollBy(${x}, ${y})`)
+      await this.host.driver.evaluate(`window.scrollBy(${x}, ${y})`)
       await this.settlePage()
-      const pos = await page.evaluate<{ x: number; y: number }>('({ x: window.scrollX, y: window.scrollY })').catch(() => ({ x, y }))
+      const pos = await this.host.driver.evaluate<{ x: number; y: number }>('({ x: window.scrollX, y: window.scrollY })').catch(() => ({ x, y }))
       const result: ScrollResult = { x: Math.trunc(pos?.x ?? x), y: Math.trunc(pos?.y ?? y) }
       if (wantDelta) { const d = await this.readSnapshotDelta(); if (d) result.delta = d }
       return result
@@ -309,10 +291,9 @@ export class PageOps {
   async press(params: PressParams, signal?: AbortSignal): Promise<PressResult> {
     throwIfAborted(signal)
     if (!(await this.host.ensureStarted())) throw new BrowserToolError('browser-error', this.host.startError ?? 'browser unavailable')
-    const page = this.requirePage()
     try {
       throwIfAborted(signal)
-      await page.keyboard.press(params.key)
+      await this.host.driver.press(params.key)
       return { success: true }
     } catch (err) {
       // Preserve a canonical tool error (e.g. B8 `timed-out`) — only wrap
@@ -327,12 +308,10 @@ export class PageOps {
   async wait(params: WaitParams, signal?: AbortSignal): Promise<WaitResult> {
     throwIfAborted(signal)
     if (!(await this.host.ensureStarted())) throw new BrowserToolError('browser-error', this.host.startError ?? 'browser unavailable')
-    const page = this.requirePage()
     try {
       if (params.selector) {
         throwIfAborted(signal)
-        const locator = await resolveFrameAware(page, params.selector, undefined)
-        await waitForLocator(locator, params.timeoutMs ?? this.host.settleTimeoutMs)
+        await this.host.driver.waitForVisible(params.selector, undefined, { timeout: params.timeoutMs ?? this.host.settleTimeoutMs })
         return { waited: true, visible: true }
       }
       const ms = Math.max(0, Math.min(Number(params.ms) || 0, 30_000))
@@ -341,8 +320,9 @@ export class PageOps {
         // sit in a bare setTimeout while the harness already gave up (B8).
         if (signal) {
           await new Promise<void>((resolve) => {
-            const timer = setTimeout(resolve, ms)
-            signal.addEventListener('abort', () => { clearTimeout(timer); resolve() }, { once: true })
+            const onAbort = (): void => { clearTimeout(timer); signal.removeEventListener('abort', onAbort); resolve() }
+            const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve() }, ms)
+            signal.addEventListener('abort', onAbort, { once: true })
           })
           throwIfAborted(signal)
         } else {
@@ -362,16 +342,13 @@ export class PageOps {
   async hover(params: HoverParams, signal?: AbortSignal): Promise<HoverResult> {
     throwIfAborted(signal)
     if (!(await this.host.ensureStarted())) throw new BrowserToolError('browser-error', this.host.startError ?? 'browser unavailable')
-    const page = this.requirePage()
     try {
-      // `text` (visible text) wins over `selector`; search main frame then frames.
+      // `text` (visible text) wins over `selector`; the driver encapsulates the
+      // frame-aware, wait-for-actionable lookup.
       throwIfAborted(signal)
-      const locator = await resolveFrameAware(page, params.selector, params.text)
-      await waitForLocator(locator, this.host.actionTimeoutMs)
-      throwIfAborted(signal)
-      await locator.first().hover({ timeout: this.host.actionTimeoutMs })
+      await this.host.driver.hover(params.selector, params.text, { timeout: this.host.actionTimeoutMs })
       // Let any hover-triggered UI settle a beat.
-      await page.evaluate('new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))').catch(() => undefined)
+      await this.host.driver.evaluate('new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))').catch(() => undefined)
       return { success: true }
     } catch (err) {
       // Preserve a canonical tool error (e.g. B8 `timed-out`) — only wrap
@@ -384,13 +361,12 @@ export class PageOps {
 
   async cookies(params: CookiesParams): Promise<CookiesResult> {
     if (!(await this.host.ensureStarted())) throw new BrowserToolError('browser-error', this.host.startError ?? 'browser unavailable')
-    const ctx = this.requireContext()
     try {
-      if (params.clear) await ctx.clearCookies()
+      if (params.clear) await this.host.driver.clearCookies()
       if (params.cookies && params.cookies.length > 0) {
-        await ctx.addCookies(params.cookies)
+        await this.host.driver.addCookies(params.cookies)
       }
-      const cookies = await ctx.cookies()
+      const cookies = await this.host.driver.cookies()
       // Redact cookie values by default so auth state never leaks into the
       // model context; `readValues: true` is the explicit opt-in (P1-04).
       const readValues = params.readValues === true
@@ -407,10 +383,9 @@ export class PageOps {
   async evaluate(params: EvaluateParams, signal?: AbortSignal): Promise<EvaluateResult> {
     throwIfAborted(signal)
     if (!(await this.host.ensureStarted())) throw new BrowserToolError('browser-error', this.host.startError ?? 'browser unavailable')
-    const page = this.requirePage()
     try {
       throwIfAborted(signal)
-      const result = await raceAbort(page.evaluate(params.expression as unknown as string), signal)
+      const result = await this.host.driver.evaluate(params.expression as unknown as string, signal)
       return { result }
     } catch (err) {
       // Preserve a canonical tool error (e.g. B8 `timed-out`) — only wrap
@@ -424,9 +399,8 @@ export class PageOps {
   /** Capture the current viewport as a PNG buffer at the configured quality. */
   async captureScreenshot(_params: ScreenshotParams): Promise<Buffer> {
     if (!(await this.host.ensureStarted())) throw new BrowserToolError('browser-error', this.host.startError ?? 'browser unavailable')
-    const page = this.requirePage()
     const type = this.host.config.screenshot.format === 'png' ? 'png' : 'jpeg'
-    return page.screenshot({ type, quality: type === 'jpeg' ? this.host.config.screenshot.quality : undefined })
+    return this.host.driver.screenshot({ type, quality: type === 'jpeg' ? this.host.config.screenshot.quality : undefined })
   }
 
   /**
@@ -448,7 +422,6 @@ export class PageOps {
    */
   async captureSegments(opts?: { maxImageBytes?: number }): Promise<CaptureSegmentsResult> {
     if (!(await this.host.ensureStarted())) throw new BrowserToolError('browser-error', this.host.startError ?? 'browser unavailable')
-    const page = this.requirePage()
     const type = this.host.config.screenshot.format === 'png' ? 'png' : 'jpeg'
     const quality = type === 'jpeg' ? this.host.config.screenshot.quality : undefined
     const budget = opts?.maxImageBytes ?? DEFAULT_MAX_IMAGE_BYTES
@@ -459,11 +432,14 @@ export class PageOps {
     const stepX = Math.max(1, vpW - overlap)
     const stepY = Math.max(1, vpH - overlap)
 
+    const capture = () => this.captureWithBudget(type, quality, budget)
+    const evalPage = <T,>(expr: string) => this.host.driver.evaluate<T>(expr)
+
     const single = async (): Promise<CaptureSegmentsResult> => {
-      const buf = await captureWithBudget(page, type, quality, budget)
+      const buf = await capture()
       // Even when not tiling, report the page's real scrollable extent (not the
       // viewport size) so callers/agents see how much content exists (P1-09).
-      const size = await page.evaluate<{ w: number; h: number }>(
+      const size = await evalPage<{ w: number; h: number }>(
         '({ w: Math.max(document.body.scrollWidth, document.documentElement.scrollWidth), h: Math.max(document.body.scrollHeight, document.documentElement.scrollHeight) })',
       ).catch(() => ({ w: 0, h: 0 }))
       return {
@@ -477,7 +453,7 @@ export class PageOps {
     if (this.host.config.tiling.mode === 'off') return single()
 
     // Determine the scrollable width/height and the "needs tiling" thresholds.
-    const size = await page.evaluate<{ w: number; h: number }>(
+    const size = await evalPage<{ w: number; h: number }>(
       '({ w: Math.max(document.body.scrollWidth, document.documentElement.scrollWidth), h: Math.max(document.body.scrollHeight, document.documentElement.scrollHeight) })',
     ).catch(() => ({ w: 0, h: 0 }))
     const pageW = size.w
@@ -507,7 +483,7 @@ export class PageOps {
     const segmentsTotal = neededCols * neededRows
 
     // Remember where the page was so an observation never leaves it scrolled.
-    const startScroll = await page.evaluate<{ x: number; y: number }>(
+    const startScroll = await evalPage<{ x: number; y: number }>(
       '({ x: window.scrollX, y: window.scrollY })',
     ).catch(() => ({ x: 0, y: 0 }))
 
@@ -519,17 +495,17 @@ export class PageOps {
       for (let cx = 0; cx < neededCols; cx += 1) {
         if (buffers.length >= maxTiles) break outer
         const x = cx * stepX
-        await page.evaluate(`window.scrollTo(${x}, ${y})`).catch(() => undefined)
+        await evalPage(`window.scrollTo(${x}, ${y})`).catch(() => undefined)
         // Wait two animation frames so the segment is painted before capture.
-        await page.evaluate('new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))').catch(() => undefined)
-        buffers.push(await captureWithBudget(page, type, quality, budget))
+        await evalPage('new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))').catch(() => undefined)
+        buffers.push(await capture())
         capturedWidth = Math.max(capturedWidth, x + vpW)
         capturedHeight = Math.max(capturedHeight, y + vpH)
       }
     }
     // Restore the ORIGINAL scroll position for the next tool call (tiling is an
     // observation and must not move the page under the agent).
-    await page.evaluate(`window.scrollTo(${startScroll.x}, ${startScroll.y})`).catch(() => undefined)
+    await evalPage(`window.scrollTo(${startScroll.x}, ${startScroll.y})`).catch(() => undefined)
     if (buffers.length === 0) return single()
 
     const truncated = buffers.length < segmentsTotal
@@ -552,11 +528,10 @@ export class PageOps {
    */
   async pdf(params: PdfParams): Promise<PdfResult> {
     if (!(await this.host.ensureStarted())) throw new BrowserToolError('browser-error', this.host.startError ?? 'browser unavailable')
-    const page = this.requirePage()
     try {
       const format = params.format || 'A4'
       const printBackground = params.printBackground !== false
-      const buf = await page.pdf({ format, printBackground })
+      const buf = await this.host.driver.pdf({ format, printBackground })
       let outPath = params.path ?? ''
       if (!outPath) {
         outPath = join(tmpdir(), `browser-use-${Date.now()}.pdf`)
@@ -565,7 +540,7 @@ export class PageOps {
         if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true })
       }
       writeFileSync(outPath, buf)
-      return { url: sanitizeUrl(page.url(), this.host.env.sensitiveQueryKeys), path: outPath, bytes: buf.length }
+      return { url: sanitizeUrl(this.host.driver.currentUrl(), this.host.env.sensitiveQueryKeys), path: outPath, bytes: buf.length }
     } catch (err) {
       // Preserve a canonical tool error (e.g. B8 `timed-out`) — only wrap
       // unexpected runtime failures into the generic `browser-error`.
@@ -585,13 +560,12 @@ export class PageOps {
   async download(params: DownloadParams, signal?: AbortSignal): Promise<DownloadResult> {
     throwIfAborted(signal)
     if (!(await this.host.ensureStarted())) throw new BrowserToolError('browser-error', this.host.startError ?? 'browser unavailable')
-    const context = this.requireContext()
     // Request the RAW URL (a signed/token URL must not be scrubbed) — only the
     // displayed URL is sanitized so a secret never leaks into the model context.
     const url = requestUrl(params.url)
     try {
       throwIfAborted(signal)
-      const resp = await context.request.get(url, { timeout: this.host.navTimeoutMs })
+      const resp = await this.host.driver.requestGet(url, { timeout: this.host.navTimeoutMs, signal })
       if (!resp.ok()) {
         throw new BrowserToolError('browser-error', t('error.download', this.host.lang, { message: `HTTP ${resp.status()}` }))
       }
@@ -664,11 +638,10 @@ export class PageOps {
    */
   async snapshot(params: SnapshotParams): Promise<SnapshotResult> {
     if (!(await this.host.ensureStarted())) throw new BrowserToolError('browser-error', this.host.startError ?? 'browser unavailable')
-    const page = this.requirePage()
     const maxNodes = Math.min(Math.max(Number(params.maxNodes) || 200, 1), 500)
     const wantDelta = params.delta === true
     try {
-      const nodes = (await page.evaluate<unknown[]>(
+      const nodes = (await this.host.driver.evaluate<unknown[]>(
         `(() => {
           const MAX = ${maxNodes};
           const DELTA = ${wantDelta ? 'true' : 'false'};
@@ -803,9 +776,8 @@ export class PageOps {
    */
   async elementSummary(): Promise<string> {
     if (!(await this.host.ensureStarted())) return ''
-    const page = this.requirePage()
     try {
-      const result = await page.evaluate(
+      const result = await this.host.driver.evaluate(
         `(() => {
           const pick = (sel) => [...document.querySelectorAll(sel)]
             .filter((el) => el.offsetWidth > 0 || el.offsetHeight > 0)

@@ -8,20 +8,33 @@
  * every required method + accessor, and (b) a minimal stub that shares the same
  * public surface is structurally compatible (i.e. the contract is honest).
  *
+ * The driver is a FULL backend seam: it exposes semantic page/context-level
+ * operations and does NOT leak a raw `page`/`context` handle. Navigation,
+ * interaction, observation, cookies and download all route through driver
+ * methods, so a non-Playwright backend can be swapped in without touching the
+ * session.
+ *
  * Run: `node --import tsx/esm scripts/driver-contract-check.mjs`
  */
 import assert from 'node:assert/strict'
 
 const { PlaywrightDriver } = await import('../src/driver/playwright-driver.js')
 
-// The required method set from the BrowserDriver interface. This is the HONEST
-// contract: the session only delegates launch/lifecycle/settle to the driver;
-// navigation/click/type/screenshot/download still use the structural Playwright
-// `page`/`context` surface directly (docs/验收记录.md P2-1 "launcher abstraction").
-const METHODS = ['start', 'close', 'version', 'settleStable']
+// The required method set from the BrowserDriver interface (lifecycle + all
+// page/context primitives). The session owns only orchestration; every browser
+// operation goes through these driver methods.
+const METHODS = [
+  'start', 'close', 'version', 'settleStable',
+  'goto', 'goBack', 'goForward', 'reload', 'title', 'currentUrl', 'waitForLoadState',
+  'click', 'fill', 'hover', 'press', 'waitForVisible',
+  'evaluate', 'screenshot', 'pdf',
+  'setViewportSize', 'storageState',
+  'cookies', 'addCookies', 'clearCookies', 'requestGet',
+]
 
-// The required read-only accessors from the BrowserDriver interface.
-const ACCESSORS = ['startError', 'running', 'page', 'context']
+// The required read-only accessors from the BrowserDriver interface. A raw
+// `page`/`context` handle is deliberately NOT part of the contract.
+const ACCESSORS = ['startError', 'running']
 
 // 1. PlaywrightDriver implements every expected method on its prototype.
 {
@@ -43,23 +56,55 @@ const ACCESSORS = ['startError', 'running', 'page', 'context']
   console.log('[2] PlaywrightDriver exposes all contract accessors — OK')
 }
 
+// 2b. The raw Playwright `page`/`context` handle must NOT be part of the public
+//     driver surface. The whole point of the full-backend seam is that the
+//     session/page-ops never see a handle — only semantic operations.
+{
+  const proto = PlaywrightDriver.prototype
+  const leaked = ['page', 'context'].filter((a) => {
+    const desc = Object.getOwnPropertyDescriptor(proto, a)
+    return desc && typeof desc.get === 'function'
+  })
+  assert.deepEqual(leaked, [], `PlaywrightDriver must not expose page/context getters: ${leaked.join(', ')}`)
+  console.log('[2b] PlaywrightDriver hides the raw page/context handle — OK')
+}
+
 // 3. A minimal stub sharing the same public surface is structurally usable.
 //    This proves the contract is honest: a tester/extension author can swap the
 //    backend with a stub that exposes the same method names, and the session's
-//    delegation (ensureStarted → start, close, page/context getters) still holds.
+//    delegation (ensureStarted → start, close, running) still holds.
 {
   const stub = {
     startError: null,
     running: false,
-    page: null,
-    context: null,
     start: async () => false,
     close: async () => {},
     version: () => 'stub',
     settleStable: async () => {},
+    goto: async () => ({ status: null, url: '' }),
+    goBack: async () => ({ status: null, url: '' }),
+    goForward: async () => ({ status: null, url: '' }),
+    reload: async () => ({ status: null, url: '' }),
+    title: async () => '',
+    currentUrl: () => '',
+    waitForLoadState: async () => {},
+    click: async () => {},
+    fill: async () => {},
+    hover: async () => {},
+    press: async () => {},
+    waitForVisible: async () => {},
+    evaluate: async () => undefined,
+    screenshot: async () => Buffer.alloc(0),
+    pdf: async () => Buffer.alloc(0),
+    setViewportSize: async () => {},
+    storageState: async () => ({}),
+    cookies: async () => [],
+    addCookies: async () => {},
+    clearCookies: async () => {},
+    requestGet: async () => { throw new Error('unused') },
   }
   // A BrowserSession can be constructed with such a driver without a type error
-  // (structural compatibility) — the session delegates `start`/`close`/`page`
+  // (structural compatibility) — the session delegates `start`/`close`/`running`
   // through the same seam.
   const { BrowserSession } = await import('../src/browser.js')
   const { loadRuntimeEnv } = await import('../src/runtime-env.js')

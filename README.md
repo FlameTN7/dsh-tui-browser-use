@@ -96,7 +96,8 @@ config:
 
 | 变量 | 作用 | 默认 |
 |---|---|---|
-| `DSH_TUI_BROWSER_PROVIDER` / `_MODEL` / `_BASE_URL` + `OPENAI_API_KEY` | 切换到 OpenAI 兼容视觉路由（非 DeepSeek 端点） | 内置 `deepseek` 路由 |
+| `DSH_TUI_BROWSER_PROVIDER` / `_MODEL` + `OPENAI_API_KEY` | 切换到 OpenAI 兼容视觉路由（非 DeepSeek 端点） | 内置 `deepseek` 路由 |
+| `DSH_TUI_BROWSER_BASE_URL` | 非 DeepSeek/OpenAI provider 必填端点（如 Anthropic/Gemini 网关）。未设时该类 provider 降级为纯 DOM，不会误发到 OpenAI 端点 | `deepseek`/`openai` 内置端点 |
 | `DSH_TUI_BROWSER_DIALOG` | 弹窗策略 `dismiss` / `accept` / `ignore` | `dismiss` |
 | `DSH_TUI_BROWSER_ENGINE` | 浏览器引擎 `chromium` / `firefox` / `webkit` | `chromium` |
 | `DSH_TUI_BROWSER_PROXY` / `_PROXY_BYPASS` | 外网代理（浏览器启动时读取） | 无 |
@@ -128,11 +129,11 @@ npm run test:storage-state # storageState 损坏回退 + persistent 导入（真
 
 插件暴露一个小的编程面，供宿主或第三方在不动工具注册表的情况下驱动浏览器或替换后端。
 
-- **浏览器后端**：`BrowserSession` 以一个 `BrowserDriver`（默认 `PlaywrightDriver`）构造。driver 是**启动/生命周期 seam**（`start`/`close`/`settleStable` + `page`/`context`）。当前导航/点击/截图等仍直连 Playwright `page` 结构接口（如实标注为"launcher 抽象"，见 `docs/验收记录.md` P2-1），完整后端替换为后续工作；契约见 `dsh-tui-browser-use/driver`。
+- **浏览器后端**：`BrowserSession` 以一个 `BrowserDriver`（默认 `PlaywrightDriver`）构造。该 seam 是**完整后端抽象**：它是唯一的 Playwright 边界，负责启动/关闭、页面收敛（`settleStable`），并把导航/点击/类型/截图/PDF/下载/cookie 等全部页面操作收敛为语义化方法（`goto`/`goBack`/`click`/`fill`/`evaluate`/`screenshot`/`pdf`/`requestGet`…）。`BrowserSession`/page-ops 只经它驱动浏览器，**不暴露裸 `page`/`context` 句柄**——因此可整体替换成非 Playwright 后端。`dsh-tui-browser-use/driver` 同时导出 `BrowserDriver` 契约与 `createPlaywrightDriver()` 默认实现，替换后端只需注入一个实现了该契约的自定义 driver。
 - **视觉传输**：`createVisionAdapter(env, runtimeEnv)` 返回解析到的图像传输模式对应的 adapter（`file` → DeepSeek Files-API；`base64`/`url` → OpenAI 兼容内联）。可在 `dsh-tui-browser-use/vision` 替换。
 - **工具注册**：`buildToolDefinitions(deps)` / `registerTools(ctx, deps)` 注册表接受注入的 session + 视觉 resolver，宿主可包裹或扩展。
 
-子路径导出：`dsh-tui-browser-use/driver`、`dsh-tui-browser-use/vision`、`dsh-tui-browser-use/types`。工具数与统一结果信封（`{ ok, value|error, usage? }`）属契约，不可改动。
+子路径导出：`dsh-tui-browser-use/driver`（`BrowserDriver` 契约 + `createPlaywrightDriver()`）、`dsh-tui-browser-use/vision`（`createVisionAdapter`）、`dsh-tui-browser-use/types`。工具数与统一结果信封（`{ ok, value|error, usage? }`）属契约，不可改动。
 
 ## 已知限制
 

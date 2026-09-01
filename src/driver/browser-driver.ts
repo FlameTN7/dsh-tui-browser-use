@@ -8,15 +8,15 @@
  * (`run`), timeout envelope, dialog policy, console/network ring buffers,
  * snapshot/tiling/status/saveScreenshots.
  *
- * Current scope (explicit downgrade, see docs/验收记录.md P2-1): the driver is
- * a LAUNCHER abstraction. `BrowserSession` calls `start/close/version/
- * settleStable` and reads `page/context`; navigation/click/type/screenshot/
- * download still use the structural Playwright surface exposed by `page`. A
- * full backend swap that hides the page handle remains future work.
- *
- * All Playwright handles are structural-typed here so the plugin compiles
- * without pulling in the playwright type package at build time (AGENTS.md §2).
- * The default implementation is `PlaywrightDriver` (playwright-driver.ts).
+ * The driver is a FULL BACKEND seam: it exposes the semantic page- and
+ * context-level operations the session/page-ops layer needs, and it does NOT
+ * leak a raw Playwright `page`/`context` handle. Navigation, interaction,
+ * observation, cookies and download all route through driver methods, so a
+ * non-Playwright backend can be swapped in without touching the session. All
+ * Playwright handles stay private to the driver implementation; the structural
+ * types below exist only as the implementation surface for `PlaywrightDriver`
+ * and to keep the plugin compiling without pulling in the playwright type
+ * package at build time (AGENTS.md §2).
  */
 
 // ── Structural Playwright types (no hard dependency) ─────────────────────
@@ -201,23 +201,70 @@ export interface DriverStartOptions {
   handlers?: DriverHandlers
 }
 
+// ── Driver-level result / option shapes (Playwright-agnostic) ────────────
+// These are the ONLY types that cross the driver boundary. `BrowserSession` /
+// page-ops never see a raw Playwright handle; only plain data and primitives.
+
+/** A navigation result (status + resolved URL); URL NOT sanitized here. */
+export interface DriverNavResult {
+  status: number | null
+  url: string
+}
+
+/** Screenshot capture options (type `png`|`jpeg`, optional quality). */
+export interface DriverScreenshotOptions {
+  type?: string
+  quality?: number
+}
+
+/** A browser cookie (plain shape, mirrors `PwCookie`). */
+export interface DriverCookie {
+  name: string
+  value: string
+  domain: string
+  path: string
+  expires: number
+  httpOnly: boolean
+  secure: boolean
+  sameSite: string
+}
+
+/** A cookie to add (session-level shape accepted by `addCookies`). */
+export interface DriverAddCookie {
+  name: string
+  value: string
+  url?: string
+  domain?: string
+  path?: string
+}
+
+/** An HTTP response from the session request context (used by download). */
+export interface DriverHttpResponse {
+  ok(): boolean
+  status(): number
+  url(): string
+  body(): Promise<Buffer>
+  headers(): Record<string, string>
+}
+
 /**
- * The low-level browser backend. A driver owns the browser lifecycle and
- * exposes the launcher + settle primitives `BrowserSession` orchestrates.
- * Drivers must be launch-lazy: `start` may be called repeatedly and must
- * surface a missing browser as `false` (with a human-readable reason) rather
- * than throwing.
+ * The low-level browser backend. A driver owns the browser lifecycle AND all
+ * page/context primitives, so a non-Playwright backend can be swapped in
+ * without touching the session. Drivers must be launch-lazy: `start` may be
+ * called repeatedly and must surface a missing browser as `false` (with a
+ * human-readable reason) rather than throwing.
  *
- * Scope (explicit downgrade, docs/验收记录.md P2-1): this is a LAUNCHER
- * abstraction. `BrowserSession` calls `start`/`close`/`version`/`settleStable`
- * and reads `page`/`context`; navigation/click/type/screenshot/download still
- * use the structural Playwright surface exposed by `page`. A full backend swap
- * that hides the page handle remains future work (see the module header).
+ * The driver NEVER exposes a raw `page`/`context` handle — every operation a
+ * caller needs is a method here. Playwright tricks that a caller wants (e.g.
+ * the frame-aware, wait-for-actionable locator lookup used by interaction)
+ * are encapsulated INSIDE the respective methods (`click`/`fill`/`hover`/
+ * `waitForVisible`), so the boundary stays clean.
  *
- * `settleStable` is the one page primitive the session delegates to the driver
- * (B8, mutation-aware settle); the driver also carries launcher plumbing for
- * engine/proxy/storageState/dialog. The remaining navigation/locator helpers on
- * `PlaywrightDriver` are implementation conveniences, NOT part of this contract.
+ * Abort semantics (B8): navigation and evaluate accept an optional
+ * `AbortSignal` and race the underlying Playwright call against it, so a tool
+ * that exceeds its wall-clock budget returns `timed-out` instead of being
+ * hard-killed. Interaction/observe primitives are bounded by their own
+ * configured timeouts and are deliberately signal-exempt.
  */
 export interface BrowserDriver {
   /** Launch the browser + page, applying proxy/engine/userDataDir/storageState. */
@@ -230,11 +277,6 @@ export interface BrowserDriver {
   /** Browser version string for diagnostics. */
   version(): string
 
-  /** The live page (may be null before `start` succeeds). */
-  readonly page: PwPage | null
-  /** The live context (cookie/request handle). */
-  readonly context: PwContext | null
-
   /**
    * Mutation-aware settle (B8): resolves when the document is ready AND no
    * DOM mutations have occurred for a short quiet window, bounded by a hard
@@ -242,4 +284,57 @@ export interface BrowserDriver {
    * asynchronously after an action, yet never runs longer than `timeoutMs`.
    */
   settleStable(timeoutMs: number): Promise<void>
+
+  // ── Navigation ─────────────────────────────────────────────────────────
+  /** Navigate to a URL (`domcontentloaded` + best-effort load wait semantics). */
+  goto(url: string, opts?: { timeout?: number; signal?: AbortSignal }): Promise<DriverNavResult>
+  goBack(opts?: { timeout?: number; signal?: AbortSignal }): Promise<DriverNavResult>
+  goForward(opts?: { timeout?: number; signal?: AbortSignal }): Promise<DriverNavResult>
+  reload(opts?: { timeout?: number; signal?: AbortSignal }): Promise<DriverNavResult>
+  /** The current document title. */
+  title(): Promise<string>
+  /** The current page URL (NOT sanitized; the caller redacts). */
+  currentUrl(): string
+  /** Best-effort wait for a load state (e.g. `load`); never throws on failure. */
+  waitForLoadState(state?: string): Promise<void>
+
+  // ── Interaction (encapsulate frame-aware lookup + waitForLocator + act) ─
+  /** Click the first target matching `selector`/`text`, waiting for it to be actionable. */
+  click(selector?: string, text?: string, opts?: { timeout?: number }): Promise<void>
+  /** Fill an input with `text` (optionally clearing it first). */
+  fill(selector: string, text: string, opts?: { timeout?: number; clear?: boolean }): Promise<void>
+  /** Hover the first target matching `selector`/`text`. */
+  hover(selector?: string, text?: string, opts?: { timeout?: number }): Promise<void>
+  /** Press a key on the focused page (e.g. `Enter`). */
+  press(key: string): Promise<void>
+  /** Wait for a selector/text to become visible, or throw after `timeout`. */
+  waitForVisible(selector?: string, text?: string, opts?: { timeout?: number }): Promise<void>
+
+  // ── Observation ────────────────────────────────────────────────────────
+  /** Run a JS expression in the page context (string) and return its result. */
+  evaluate<T>(expression: string, signal?: AbortSignal): Promise<T>
+  /** Capture the current viewport as a PNG/JPEG buffer. */
+  screenshot(opts?: DriverScreenshotOptions): Promise<Buffer>
+  /** Print the current page to a PDF buffer. */
+  pdf(opts?: { format?: string; printBackground?: boolean }): Promise<Buffer>
+
+  // ── Viewport / session state ───────────────────────────────────────────
+  /** Resize the live page viewport (no-op if not started). */
+  setViewportSize(size: { width: number; height: number }): Promise<void>
+  /** Export the session's cookie/localStorage state (for persistence). */
+  storageState(): Promise<Record<string, unknown>>
+
+  // ── Cookies / download (context-level) ─────────────────────────────────
+  cookies(urls?: string[]): Promise<DriverCookie[]>
+  addCookies(cookies: DriverAddCookie[]): Promise<void>
+  clearCookies(): Promise<void>
+  /** Perform a same-context HTTP GET (carries session cookies/auth). */
+  requestGet(url: string, opts?: { timeout?: number; signal?: AbortSignal }): Promise<DriverHttpResponse>
 }
+
+// Re-export the default Playwright implementation from the contract module so a
+// consumer can `import { createPlaywrightDriver } from 'dsh-tui-browser-use/driver'`
+// (the `./driver` package subpath maps to this file) and get both the contract
+// types AND the concrete backend in one import — otherwise the advertised
+// "swap the browser backend" seam is unreachable through its own subpath.
+export { createPlaywrightDriver } from './playwright-driver.js'

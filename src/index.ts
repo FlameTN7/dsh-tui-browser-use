@@ -246,6 +246,16 @@ export function apply(ctx: Context, config: Config): void {
     const route = resolveRoute(provider, { baseUrl: runtimeEnv.baseUrlOverride, model: runtimeEnv.modelOverride })
     const currentModel = route.defaultModel
 
+    // A non-deepseek, non-openai provider reaches a routable endpoint ONLY via
+    // an explicit base URL override. Without one it silently lands on OpenAI's
+    // default chat/completions URL (see resolveRoute), which would misroute a
+    // foreign model (claude/gemini/custom) to OpenAI with the OpenAI key — the
+    // exact "send the wrong credentials/model to a foreign endpoint" the
+    // contract forbids (AGENTS.md §6). Degrade to DOM rather than misroute.
+    if (provider !== 'deepseek' && provider !== 'openai' && !runtimeEnv.baseUrlOverride) {
+      return null
+    }
+
     // Single source of truth for vision support + transfer. Priority (proposal
     // §5.1): user override → provider declaration → built-in table (model-level
     // fine-tuning) → model-name fallback → default no vision. This correctly

@@ -69,7 +69,13 @@ const { effectiveViewport, parseDimension } = await import('../src/capabilities.
   const { loadRuntimeEnv } = await import('../src/runtime-env.js')
 
   const scrolls = []
-  const page = {
+  const driver = {
+    get startError() { return null },
+    get running() { return true },
+    async start() { return true },
+    async close() {},
+    version() { return 'stub' },
+    async settleStable() {},
     async evaluate(expr) {
       const s = String(expr)
       if (s.includes('scrollWidth')) return { w: 2000, h: 1000 }
@@ -83,16 +89,6 @@ const { effectiveViewport, parseDimension } = await import('../src/capabilities.
       return undefined
     },
     async screenshot() { return Buffer.alloc(16) },
-  }
-  const driver = {
-    get startError() { return null },
-    get running() { return true },
-    get page() { return page },
-    get context() { return null },
-    async start() { return true },
-    async close() {},
-    version() { return 'stub' },
-    async settleStable() {},
   }
 
   const config = {

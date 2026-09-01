@@ -19,13 +19,21 @@ import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import type { RuntimeEnv } from '../runtime-env.js'
 import { effectiveViewport } from '../capabilities.js'
+import { raceAbort } from '../browser-utils.js'
 import {
   type BrowserDriver,
   type DriverStartOptions,
+  type DriverNavResult,
+  type DriverScreenshotOptions,
+  type DriverCookie,
+  type DriverAddCookie,
+  type DriverHttpResponse,
   type PwBrowser,
   type PwContext,
   type PwModule,
   type PwPage,
+  type PwFrame,
+  type PwLocator,
   type PwBrowserEngine,
 } from './browser-driver.js'
 
@@ -100,6 +108,57 @@ async function applyStorageState(ctx: PwContext, state: Record<string, unknown> 
   try { await ctx.setStorageState(state) } catch { /* fresh session fallback */ }
 }
 
+// ── Locator resolution (Playwright-specific, kept private to this backend) ─
+// These encapsulate the frame-aware, wait-for-actionable lookup so the driver
+// exposes simple `click(selector, text)`/`fill(...)` methods and the raw
+// Playwright locator/handle never leaks past the driver boundary.
+
+/** Resolve a locator from a selector/text, honoring `text=`, `role=`, `label=` and CSS. */
+function resolveLocator(target: PwPage | PwFrame, selector?: string, text?: string): PwLocator {
+  if (text !== undefined && text.length > 0) {
+    return target.getByText(text)
+  }
+  if (selector && /^role=/.test(selector)) {
+    const m = /^role=([a-z]+)(?:\[name=(.+)\])?/i.exec(selector)
+    if (m?.[1]) return target.getByRole(m[1], m[2] !== undefined ? { name: m[2] } : undefined)
+  }
+  if (selector && /^label=/.test(selector)) {
+    return target.getByLabel(selector.slice('label='.length))
+  }
+  return target.locator(selector ?? '')
+}
+
+/** Resolve an actionable locator across the main frame and child frames (iframe). */
+async function resolveFrameAware(page: PwPage, selector?: string, text?: string): Promise<PwLocator> {
+  const main = resolveLocator(page, selector, text)
+  if (selector === undefined && text === undefined) return main
+  try {
+    const mainCount = await main.count()
+    if (mainCount > 0) return main
+  } catch { /* fall through to frames */ }
+  const frames = page.frames()
+  for (const frame of frames) {
+    const loc = resolveLocator(frame, selector, text)
+    try {
+      const n = await loc.count()
+      if (n > 0) return loc
+    } catch { /* try next frame */ }
+  }
+  return main
+}
+
+/** Wait for a dynamically-rendered target to be actionable (SPA / lazy content). */
+async function waitForLocator(locator: PwLocator, timeoutMs = 6000): Promise<void> {
+  const perTry = Math.max(800, Math.min(3000, Math.round(timeoutMs / 3)))
+  for (let i = 0; i < 3; i += 1) {
+    try {
+      await locator.first().waitFor({ state: 'visible', timeout: perTry })
+      return
+    } catch { /* re-query next attempt */ }
+  }
+  await locator.first().waitFor({ state: 'visible', timeout: perTry })
+}
+
 export class PlaywrightDriver implements BrowserDriver {
   private _pw: PwModule | null = null
   private _engine: PwBrowser | null = null
@@ -109,8 +168,16 @@ export class PlaywrightDriver implements BrowserDriver {
 
   get startError(): string | null { return this._startError }
   get running(): boolean { return this._engine !== null && this._page !== null }
-  get page(): PwPage | null { return this._page }
-  get context(): PwContext | null { return this._ctx }
+
+  private requirePage(): PwPage {
+    if (!this._page) throw new Error('browser not started')
+    return this._page
+  }
+
+  private requireContext(): PwContext {
+    if (!this._ctx) throw new Error('browser context not started')
+    return this._ctx
+  }
 
   private async loadPlaywright(): Promise<PwModule | null> {
     if (this._pw !== null) return this._pw
@@ -275,11 +342,6 @@ export class PlaywrightDriver implements BrowserDriver {
     try { return this._engine?.version() ?? 'unknown' } catch { return 'unknown' }
   }
 
-  private requirePage(): PwPage {
-    if (!this._page) throw new Error('browser not started')
-    return this._page
-  }
-
   // ── Page primitives ────────────────────────────────────────────────────
 
   /**
@@ -326,6 +388,113 @@ export class PlaywrightDriver implements BrowserDriver {
         timer = setTimeout(check, Math.min(60, Math.max(16, deadline - Date.now())));
       })`,
     ).catch(() => undefined)
+  }
+
+  // ── Navigation ─────────────────────────────────────────────────────────
+  async goto(url: string, opts?: { timeout?: number; signal?: AbortSignal }): Promise<DriverNavResult> {
+    const page = this.requirePage()
+    const resp = await raceAbort(page.goto(url, { waitUntil: 'domcontentloaded', timeout: opts?.timeout }), opts?.signal)
+    return { status: resp?.status() ?? null, url: resp?.url() ?? url }
+  }
+
+  async goBack(opts?: { timeout?: number; signal?: AbortSignal }): Promise<DriverNavResult> {
+    const page = this.requirePage()
+    const resp = await raceAbort(page.goBack({ waitUntil: 'domcontentloaded', timeout: opts?.timeout }), opts?.signal)
+    return { status: resp?.status() ?? null, url: resp?.url() ?? page.url() }
+  }
+
+  async goForward(opts?: { timeout?: number; signal?: AbortSignal }): Promise<DriverNavResult> {
+    const page = this.requirePage()
+    const resp = await raceAbort(page.goForward({ waitUntil: 'domcontentloaded', timeout: opts?.timeout }), opts?.signal)
+    return { status: resp?.status() ?? null, url: resp?.url() ?? page.url() }
+  }
+
+  async reload(opts?: { timeout?: number; signal?: AbortSignal }): Promise<DriverNavResult> {
+    const page = this.requirePage()
+    const resp = await raceAbort(page.reload({ waitUntil: 'domcontentloaded', timeout: opts?.timeout }), opts?.signal)
+    return { status: resp?.status() ?? null, url: resp?.url() ?? page.url() }
+  }
+
+  async title(): Promise<string> {
+    return this.requirePage().title()
+  }
+
+  currentUrl(): string {
+    return this.requirePage().url()
+  }
+
+  async waitForLoadState(state?: string): Promise<void> {
+    await this.requirePage().waitForLoadState(state).catch(() => undefined)
+  }
+
+  // ── Interaction (frame-aware lookup + waitForLocator + act) ────────────
+  async click(selector?: string, text?: string, opts?: { timeout?: number }): Promise<void> {
+    const locator = await resolveFrameAware(this.requirePage(), selector, text)
+    await waitForLocator(locator, opts?.timeout)
+    await locator.first().click({ timeout: opts?.timeout })
+  }
+
+  async fill(selector: string, text: string, opts?: { timeout?: number; clear?: boolean }): Promise<void> {
+    const locator = await resolveFrameAware(this.requirePage(), selector, undefined)
+    await waitForLocator(locator, opts?.timeout)
+    const field = locator.first()
+    if (opts?.clear) await field.clear({ timeout: opts.timeout }).catch(() => undefined)
+    await field.fill(text, { timeout: opts?.timeout })
+  }
+
+  async hover(selector?: string, text?: string, opts?: { timeout?: number }): Promise<void> {
+    const locator = await resolveFrameAware(this.requirePage(), selector, text)
+    await waitForLocator(locator, opts?.timeout)
+    await locator.first().hover({ timeout: opts?.timeout })
+  }
+
+  async press(key: string): Promise<void> {
+    await this.requirePage().keyboard.press(key)
+  }
+
+  async waitForVisible(selector?: string, text?: string, opts?: { timeout?: number }): Promise<void> {
+    const locator = await resolveFrameAware(this.requirePage(), selector, text)
+    await waitForLocator(locator, opts?.timeout)
+  }
+
+  // ── Observation ────────────────────────────────────────────────────────
+  async evaluate<T>(expression: string, signal?: AbortSignal): Promise<T> {
+    const page = this.requirePage()
+    return raceAbort(page.evaluate<T>(expression), signal)
+  }
+
+  async screenshot(opts?: DriverScreenshotOptions): Promise<Buffer> {
+    return this.requirePage().screenshot(opts)
+  }
+
+  async pdf(opts?: { format?: string; printBackground?: boolean }): Promise<Buffer> {
+    return this.requirePage().pdf(opts)
+  }
+
+  // ── Viewport / session state ───────────────────────────────────────────
+  async setViewportSize(size: { width: number; height: number }): Promise<void> {
+    await this.requirePage().setViewportSize(size)
+  }
+
+  async storageState(): Promise<Record<string, unknown>> {
+    return this.requireContext().storageState()
+  }
+
+  // ── Cookies / download ─────────────────────────────────────────────────
+  async cookies(urls?: string[]): Promise<DriverCookie[]> {
+    return this.requireContext().cookies(urls)
+  }
+
+  async addCookies(cookies: DriverAddCookie[]): Promise<void> {
+    await this.requireContext().addCookies(cookies)
+  }
+
+  async clearCookies(): Promise<void> {
+    await this.requireContext().clearCookies()
+  }
+
+  async requestGet(url: string, opts?: { timeout?: number; signal?: AbortSignal }): Promise<DriverHttpResponse> {
+    return raceAbort(this.requireContext().request.get(url, { timeout: opts?.timeout }), opts?.signal)
   }
 }
 

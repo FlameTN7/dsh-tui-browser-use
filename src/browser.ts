@@ -22,7 +22,7 @@ import { t } from './i18n.js'
 import { effectiveViewport } from './capabilities.js'
 import { loadRuntimeEnv, type RuntimeEnv } from './runtime-env.js'
 import { PlaywrightDriver } from './driver/playwright-driver.js'
-import type { BrowserDriver, PwPage, PwContext } from './driver/browser-driver.js'
+import type { BrowserDriver } from './driver/browser-driver.js'
 import { BrowserToolError, sanitizeUrl } from './browser-utils.js'
 import { PageOps, type PageOpsHost } from './page-ops.js'
 import {
@@ -77,8 +77,6 @@ export { sanitizeUrl, cookieValue, splitSaveStem, BrowserToolError } from './bro
 
 /** The long-lived browser session shared across tool calls. */
 export class BrowserSession implements PageOpsHost {
-  private _page: PwPage | null = null
-  private _ctx: PwContext | null = null
   private _startError: string | null = null
   /** UI language for user-facing errors. */
   readonly lang: 'zh' | 'en'
@@ -146,10 +144,8 @@ export class BrowserSession implements PageOpsHost {
   }
 
   // ── PageOpsHost ─────────────────────────────────────────────────────────
-  // These getters expose exactly what `PageOps` reads to drive the page; the
-  // fields stay private so the session remains the single writer.
-  get page(): PwPage | null { return this._page }
-  get ctx(): PwContext | null { return this._ctx }
+  // The driver is the sole browser boundary; page-ops reads only the start
+  // error (for a graceful `browser-error`), never a raw handle.
   get startError(): string | null { return this._startError }
 
   /** Resolve the effective viewport size (P0-03). Prefers the explicit
@@ -178,10 +174,9 @@ export class BrowserSession implements PageOpsHost {
    */
   async applyViewport(size?: { width: number; height: number }): Promise<void> {
     const dim = size ?? this.viewportSize()
-    const page = this._page
-    if (!page) return
+    if (!this.driver.running) return
     await this.run(async () => {
-      await page.setViewportSize({ width: dim.width, height: dim.height }).catch(() => undefined)
+      await this.driver.setViewportSize({ width: dim.width, height: dim.height }).catch(() => undefined)
     })
   }
 
@@ -191,11 +186,11 @@ export class BrowserSession implements PageOpsHost {
    * Playwright-bundled Chromium. `DSH_TUI_BROWSER_ENGINE` selects `firefox`/
    * `webkit` for cross-engine coverage; the chromium path stays the default.
    * The launch + probe logic lives in the injected {@link BrowserDriver}; this
-   * session forwards the effective config/env and caches the resulting
-   * page/context for its own orchestration (run/timeout/snapshot/tiling).
+   * session forwards the effective config/env and delegates its orchestration
+   * (run/timeout/snapshot/tiling) through driver primitives.
    */
   async ensureStarted(): Promise<boolean> {
-    if (this._page !== null && this._ctx !== null) return true
+    if (this.driver.running) return true
     // Re-resolve the session paths on each fresh start so a live `/settings`
     // edit to `session.mode`/`session.profile` is honoured the next time the
     // browser is actually started (matching the proxy restart semantics).
@@ -282,14 +277,8 @@ export class BrowserSession implements PageOpsHost {
       // A failed isolated attempt materialised a fresh ephemeral dir; the next
       // attempt resolves a NEW run id, so purge this one instead of leaking it.
       if (this.sessionPaths.ephemeralRunDir) purgeEphemeral(this.sessionPaths.ephemeralRunDir)
-      this._page = null
-      this._ctx = null
       return false
     }
-    // Cache the driver's live page/context so the rest of the session's
-    // orchestration (run/timeout/snapshot/tiling) operates on the real handles.
-    this._page = this.driver.page
-    this._ctx = this.driver.context
     this._startError = null
     return true
   }
@@ -300,9 +289,9 @@ export class BrowserSession implements PageOpsHost {
     // tearing the browser down (best-effort, atomic temp+rename+0600). This is
     // what lets a managed profile survive restarts. A missing/unreadable target
     // degrades silently (the browser is always closed regardless).
-    if (this.sessionPaths.storageStatePath && this._ctx) {
+    if (this.sessionPaths.storageStatePath && this.driver.running) {
       try {
-        const data = await this._ctx.storageState()
+        const data = await this.driver.storageState()
         writeStorageState(this.sessionPaths.storageStatePath, data)
         if (this.env.debug) {
           process.stderr.write(`[dsh-tui-browser-use] storage state exported: ${this.sessionPaths.storageStatePath} cookies=${(data.cookies as unknown[] | undefined)?.length ?? 0}\n`)
@@ -323,13 +312,11 @@ export class BrowserSession implements PageOpsHost {
     }
     // Best-effort cleanup of an isolated session run dir (never blocks close).
     purgeEphemeral(this.sessionPaths.ephemeralRunDir)
-    this._page = null
-    this._ctx = null
   }
 
   // ── Tools ──────────────────────────────────────────────────────────────
-  // The page-driving operations delegate to `PageOps`, which reads the live
-  // `page`/`context` via this host. Keeping the signatures here means the tool
+  // The page-driving operations delegate to `PageOps`, which drives the browser
+  // through the injected driver. Keeping the signatures here means the tool
   // registries, scripts and external callers keep their existing `session.*`
   // surface unchanged.
 
