@@ -32,7 +32,7 @@ async function main() {
 
   // Whole-source scan for key-value references (rough dead-key detection).
   let sourceText = ''
-  for (const file of ['src/index.ts', 'src/browser.ts', 'src/tools.ts', 'src/settings-section.ts', 'src/capabilities.ts', 'src/vision.ts', 'src/image-pipeline.ts', 'src/types.ts']) {
+  for (const file of ['src/index.ts', 'src/browser.ts', 'src/page-ops.ts', 'src/browser-utils.ts', 'src/tools.ts', 'src/settings-section.ts', 'src/capabilities.ts', 'src/vision.ts', 'src/image-pipeline.ts', 'src/types.ts']) {
     try {
       sourceText += readFileSync(join(root, file), 'utf8') + '\n'
     } catch { /* not built yet; ignore */ }

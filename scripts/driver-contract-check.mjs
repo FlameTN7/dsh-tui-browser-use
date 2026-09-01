@@ -14,15 +14,11 @@ import assert from 'node:assert/strict'
 
 const { PlaywrightDriver } = await import('../src/driver/playwright-driver.js')
 
-// The required method set from the BrowserDriver interface.
-const METHODS = [
-  'start', 'close', 'version',
-  'navigate', 'goBack', 'goForward', 'reload',
-  'waitLoad', 'settleRaf', 'settleStable', 'title', 'url', 'eval',
-  'scrollTo', 'scrollBy', 'scrollPos', 'keyboardPress', 'screenshot', 'pdf',
-  'resolveFrameAware', 'waitForLocator', 'clickLocator', 'hoverLocator', 'fillLocator', 'clearLocator',
-  'cookies', 'clearCookies', 'addCookies', 'requestGet',
-]
+// The required method set from the BrowserDriver interface. This is the HONEST
+// contract: the session only delegates launch/lifecycle/settle to the driver;
+// navigation/click/type/screenshot/download still use the structural Playwright
+// `page`/`context` surface directly (docs/验收记录.md P2-1 "launcher abstraction").
+const METHODS = ['start', 'close', 'version', 'settleStable']
 
 // The required read-only accessors from the BrowserDriver interface.
 const ACCESSORS = ['startError', 'running', 'page', 'context']
@@ -60,32 +56,7 @@ const ACCESSORS = ['startError', 'running', 'page', 'context']
     start: async () => false,
     close: async () => {},
     version: () => 'stub',
-    navigate: async () => null,
-    goBack: async () => null,
-    goForward: async () => null,
-    reload: async () => null,
-    waitLoad: async () => {},
-    settleRaf: async () => {},
     settleStable: async () => {},
-    title: async () => '',
-    url: () => '',
-    eval: async () => undefined,
-    scrollTo: async () => {},
-    scrollBy: async () => {},
-    scrollPos: async () => ({ x: 0, y: 0 }),
-    keyboardPress: async () => {},
-    screenshot: async () => Buffer.alloc(0),
-    pdf: async () => Buffer.alloc(0),
-    resolveFrameAware: async () => ({ first: () => ({ waitFor: async () => {}, click: async () => {}, hover: async () => {}, fill: async () => {}, clear: async () => {}, count: async () => 0 }) }),
-    waitForLocator: async () => {},
-    clickLocator: async () => {},
-    hoverLocator: async () => {},
-    fillLocator: async () => {},
-    clearLocator: async () => {},
-    cookies: async () => [],
-    clearCookies: async () => {},
-    addCookies: async () => {},
-    requestGet: async () => ({ ok: () => true, status: () => 200, url: () => '', body: async () => Buffer.alloc(0), headers: () => ({}) }),
   }
   // A BrowserSession can be constructed with such a driver without a type error
   // (structural compatibility) — the session delegates `start`/`close`/`page`

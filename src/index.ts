@@ -389,11 +389,14 @@ export function apply(ctx: Context, config: Config): void {
   // Tear down the browser and settings when the plugin fiber stops. `close`
   // is queued onto the session's serial mutex so it drains AFTER any tool call
   // already dispatched by the harness — never interleaved with Playwright ops.
+  // The cleanup MUST be async (Cordis awaits the returned promise); a sync
+  // cleanup with `void session.run(...)` lets the process exit before the
+  // storage-state snapshot is written, silently losing session cookies.
   ctx.effect(() => {
-    return () => {
+    return async () => {
       disposer?.()
       settingsDisposer?.()
-      void session.run(() => session.close())
+      await session.run(() => session.close())
     }
   })
 

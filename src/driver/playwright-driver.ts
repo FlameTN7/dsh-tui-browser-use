@@ -22,16 +22,11 @@ import { effectiveViewport } from '../capabilities.js'
 import {
   type BrowserDriver,
   type DriverStartOptions,
-  type PwApiResponse,
   type PwBrowser,
   type PwContext,
-  type PwFrame,
-  type PwLocator,
   type PwModule,
-  type PwNavigation,
   type PwPage,
   type PwBrowserEngine,
-  type PwCookie,
 } from './browser-driver.js'
 
 /** Chromium-as-root container flags (sandbox/GPU path can stall first start). */
@@ -73,11 +68,6 @@ function isRealBrowserBinary(p: string): boolean {
   } catch {
     return false
   }
-}
-
-/** Throw if the signal is already aborted (pre-dispatch short-circuit, B8). */
-function throwIfAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) throw signal.reason ?? new Error('aborted')
 }
 
 /**
@@ -290,48 +280,7 @@ export class PlaywrightDriver implements BrowserDriver {
     return this._page
   }
 
-  private requireContext(): PwContext {
-    if (!this._ctx) throw new Error('browser context not started')
-    return this._ctx
-  }
-
-  // ── Navigation ─────────────────────────────────────────────────────────
-
-  async navigate(url: string, timeoutMs: number, signal?: AbortSignal): Promise<PwNavigation> {
-    throwIfAborted(signal)
-    const page = this.requirePage()
-    const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeoutMs })
-    await page.waitForLoadState('load').catch(() => undefined)
-    return resp
-  }
-
-  async goBack(timeoutMs: number, signal?: AbortSignal): Promise<PwNavigation> {
-    throwIfAborted(signal)
-    const page = this.requirePage()
-    return page.goBack({ waitUntil: 'domcontentloaded', timeout: timeoutMs }).catch(() => null)
-  }
-
-  async goForward(timeoutMs: number, signal?: AbortSignal): Promise<PwNavigation> {
-    throwIfAborted(signal)
-    const page = this.requirePage()
-    return page.goForward({ waitUntil: 'domcontentloaded', timeout: timeoutMs }).catch(() => null)
-  }
-
-  async reload(timeoutMs: number, signal?: AbortSignal): Promise<PwNavigation> {
-    throwIfAborted(signal)
-    const page = this.requirePage()
-    return page.reload({ waitUntil: 'domcontentloaded', timeout: timeoutMs }).catch(() => null)
-  }
-
   // ── Page primitives ────────────────────────────────────────────────────
-
-  async waitLoad(): Promise<void> {
-    await this.requirePage().waitForLoadState('load').catch(() => undefined)
-  }
-
-  async settleRaf(): Promise<void> {
-    await this.requirePage().evaluate('new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))').catch(() => undefined)
-  }
 
   /**
    * Mutation-aware settle (B8): a fast path (double-rAF) resolves immediately
@@ -377,117 +326,6 @@ export class PlaywrightDriver implements BrowserDriver {
         timer = setTimeout(check, Math.min(60, Math.max(16, deadline - Date.now())));
       })`,
     ).catch(() => undefined)
-  }
-
-  async title(): Promise<string> {
-    return this.requirePage().title()
-  }
-
-  url(): string {
-    return this.requirePage().url()
-  }
-
-  async eval<T = unknown>(expr: string): Promise<T> {
-    return this.requirePage().evaluate<T>(expr)
-  }
-
-  async scrollTo(x: number, y: number): Promise<void> {
-    await this.requirePage().evaluate(`window.scrollTo(${x}, ${y})`).catch(() => undefined)
-  }
-
-  async scrollBy(x: number, y: number): Promise<void> {
-    await this.requirePage().evaluate(`window.scrollBy(${x}, ${y})`).catch(() => undefined)
-  }
-
-  async scrollPos(): Promise<{ x: number; y: number }> {
-    return this.requirePage().evaluate<{ x: number; y: number }>('({ x: window.scrollX, y: window.scrollY })').catch(() => ({ x: 0, y: 0 }))
-  }
-
-  async keyboardPress(key: string): Promise<void> {
-    await this.requirePage().keyboard.press(key)
-  }
-
-  async screenshot(opts: { type: string; quality?: number }): Promise<Buffer> {
-    return this.requirePage().screenshot({ type: opts.type, quality: opts.quality })
-  }
-
-  async pdf(opts: { format: string; printBackground: boolean }): Promise<Buffer> {
-    return this.requirePage().pdf({ format: opts.format, printBackground: opts.printBackground })
-  }
-
-  // ── Locator helpers ────────────────────────────────────────────────────
-
-  private resolveLocator(target: PwPage | PwFrame, selector?: string, text?: string): PwLocator {
-    if (text !== undefined && text.length > 0) return target.getByText(text)
-    if (selector && /^role=/.test(selector)) {
-      const m = /^role=([a-z]+)(?:\[name=(.+)\])?/i.exec(selector)
-      if (m?.[1]) return target.getByRole(m[1], m[2] !== undefined ? { name: m[2] } : undefined)
-    }
-    if (selector && /^label=/.test(selector)) return target.getByLabel(selector.slice('label='.length))
-    return target.locator(selector ?? '')
-  }
-
-  async resolveFrameAware(selector?: string, text?: string): Promise<PwLocator> {
-    const page = this.requirePage()
-    const main = this.resolveLocator(page, selector, text)
-    if (selector === undefined && text === undefined) return main
-    try {
-      const mainCount = await main.count()
-      if (mainCount > 0) return main
-    } catch { /* ignore and fall through */ }
-    for (const frame of page.frames()) {
-      const loc = this.resolveLocator(frame, selector, text)
-      try {
-        const n = await loc.count()
-        if (n > 0) return loc
-      } catch { /* try next frame */ }
-    }
-    return main
-  }
-
-  async waitForLocator(locator: PwLocator, timeoutMs: number): Promise<void> {
-    const perTry = Math.max(800, Math.min(3000, Math.round(timeoutMs / 3)))
-    for (let i = 0; i < 3; i += 1) {
-      try {
-        await locator.first().waitFor({ state: 'visible', timeout: perTry })
-        return
-      } catch { /* re-query next attempt */ }
-    }
-    await locator.first().waitFor({ state: 'visible', timeout: perTry })
-  }
-
-  async clickLocator(locator: PwLocator): Promise<void> {
-    await locator.first().click()
-  }
-
-  async hoverLocator(locator: PwLocator): Promise<void> {
-    await locator.first().hover()
-  }
-
-  async fillLocator(locator: PwLocator, text: string): Promise<void> {
-    await locator.first().fill(text)
-  }
-
-  async clearLocator(locator: PwLocator): Promise<void> {
-    await locator.first().clear()
-  }
-
-  // ── Context operations ─────────────────────────────────────────────────
-
-  async cookies(): Promise<PwCookie[]> {
-    return this.requireContext().cookies()
-  }
-
-  async clearCookies(): Promise<void> {
-    await this.requireContext().clearCookies()
-  }
-
-  async addCookies(cookies: Array<{ name: string; value: string; url?: string; domain?: string; path?: string }>): Promise<void> {
-    await this.requireContext().addCookies(cookies)
-  }
-
-  async requestGet(url: string, timeoutMs: number): Promise<PwApiResponse> {
-    return this.requireContext().request.get(url, { timeout: timeoutMs })
   }
 }
 

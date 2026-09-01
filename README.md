@@ -128,7 +128,7 @@ npm run test:storage-state # storageState 损坏回退 + persistent 导入（真
 
 插件暴露一个小的编程面，供宿主或第三方在不动工具注册表的情况下驱动浏览器或替换后端。
 
-- **浏览器后端**：`BrowserSession` 以一个 `BrowserDriver`（默认 `PlaywrightDriver`）构造。注入自己的 driver（如 stub 或将来的 headless-shell 后端）即可替换 Playwright 实现。driver 契约见 `dsh-tui-browser-use/driver`。
+- **浏览器后端**：`BrowserSession` 以一个 `BrowserDriver`（默认 `PlaywrightDriver`）构造。driver 是**启动/生命周期 seam**（`start`/`close`/`settleStable` + `page`/`context`）。当前导航/点击/截图等仍直连 Playwright `page` 结构接口（如实标注为"launcher 抽象"，见 `docs/验收记录.md` P2-1），完整后端替换为后续工作；契约见 `dsh-tui-browser-use/driver`。
 - **视觉传输**：`createVisionAdapter(env, runtimeEnv)` 返回解析到的图像传输模式对应的 adapter（`file` → DeepSeek Files-API；`base64`/`url` → OpenAI 兼容内联）。可在 `dsh-tui-browser-use/vision` 替换。
 - **工具注册**：`buildToolDefinitions(deps)` / `registerTools(ctx, deps)` 注册表接受注入的 session + 视觉 resolver，宿主可包裹或扩展。
 

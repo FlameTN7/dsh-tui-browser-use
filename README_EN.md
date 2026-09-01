@@ -127,7 +127,7 @@ npm run test:storage-state # storageState corruption fallback + persistent impor
 
 The plugin exposes a small programming surface so a host or third party can drive the browser or swap a backend without touching the tool registries.
 
-- **Browser backend**: `BrowserSession` is constructed with a `BrowserDriver` (default `PlaywrightDriver`). Inject your own driver (e.g. a stub or a future headless-shell backend) to replace the Playwright implementation. The driver contract lives at `dsh-tui-browser-use/driver`.
+- **Browser backend**: `BrowserSession` is constructed with a `BrowserDriver` (default `PlaywrightDriver`). The driver is the **launch/lifecycle seam** (`start`/`close`/`settleStable` + `page`/`context`). Navigation/click/screenshot currently still drive the structural Playwright `page` surface directly (honestly labelled a "launcher abstraction", see `docs/验收记录.md` P2-1); a full backend swap is future work. See the contract at `dsh-tui-browser-use/driver`.
 - **Vision transport**: `createVisionAdapter(env, runtimeEnv)` returns the adapter for the resolved image-transfer mode (`file` → DeepSeek Files-API; `base64`/`url` → OpenAI-compatible inline). Swappable at `dsh-tui-browser-use/vision`.
 - **Tool registration**: `buildToolDefinitions(deps)` / `registerTools(ctx, deps)` registries accept an injected session + vision resolver, so a host can wrap or extend them.
 

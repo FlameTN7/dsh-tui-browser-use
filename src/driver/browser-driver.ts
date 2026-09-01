@@ -29,13 +29,15 @@ export interface PwElementHandle {
   isVisible(): Promise<boolean>
 }
 
-/** A Playwright locator handle (structural, minimal for click/fill/wait). */
+/** A Playwright locator handle (structural, minimal for click/fill/wait).
+ * Action methods accept an optional `{ timeout }` so a caller can bound a slow
+ * SPA mount; `waitFor` carries the same state enum Playwright uses. */
 export interface PwLocator {
-  click(): Promise<void>
-  fill(text: string): Promise<void>
+  click(opts?: { timeout?: number }): Promise<void>
+  fill(text: string, opts?: { timeout?: number }): Promise<void>
   type(text: string): Promise<void>
-  clear(): Promise<void>
-  hover(): Promise<void>
+  clear(opts?: { timeout?: number }): Promise<void>
+  hover(opts?: { timeout?: number }): Promise<void>
   first(): PwLocator
   waitFor(opts?: { state?: 'visible' | 'hidden' | 'attached' | 'detached'; timeout?: number }): Promise<void>
   count(): Promise<number>
@@ -178,9 +180,6 @@ export type PwBrowserEngine = 'chromium' | 'firefox' | 'webkit'
 
 // ── The driver contract ──────────────────────────────────────────────────
 
-/** A navigation response (Playwright's `Response`-like shape, nullable on some engines). */
-export type PwNavigation = { status(): number | null; url(): string } | null
-
 /** Callbacks a driver fires during `start` so the session keeps its own state. */
 export interface DriverHandlers {
   onDialog?(dialog: PwDialog): void
@@ -204,9 +203,21 @@ export interface DriverStartOptions {
 
 /**
  * The low-level browser backend. A driver owns the browser lifecycle and
- * exposes the primitives `BrowserSession` orchestrates. Drivers must be
- * launch-lazy: `start` may be called repeatedly and must surface a missing
- * browser as `false` (with a human-readable reason) rather than throwing.
+ * exposes the launcher + settle primitives `BrowserSession` orchestrates.
+ * Drivers must be launch-lazy: `start` may be called repeatedly and must
+ * surface a missing browser as `false` (with a human-readable reason) rather
+ * than throwing.
+ *
+ * Scope (explicit downgrade, docs/验收记录.md P2-1): this is a LAUNCHER
+ * abstraction. `BrowserSession` calls `start`/`close`/`version`/`settleStable`
+ * and reads `page`/`context`; navigation/click/type/screenshot/download still
+ * use the structural Playwright surface exposed by `page`. A full backend swap
+ * that hides the page handle remains future work (see the module header).
+ *
+ * `settleStable` is the one page primitive the session delegates to the driver
+ * (B8, mutation-aware settle); the driver also carries launcher plumbing for
+ * engine/proxy/storageState/dialog. The remaining navigation/locator helpers on
+ * `PlaywrightDriver` are implementation conveniences, NOT part of this contract.
  */
 export interface BrowserDriver {
   /** Launch the browser + page, applying proxy/engine/userDataDir/storageState. */
@@ -224,21 +235,6 @@ export interface BrowserDriver {
   /** The live context (cookie/request handle). */
   readonly context: PwContext | null
 
-  // ── Navigation ─────────────────────────────────────────────────────────
-  // Every navigation method accepts an optional AbortSignal so a wall-clock
-  // timeout can short-circuit a pre-dispatch (B8): the signal is checked
-  // BEFORE the operation is issued. The Playwright implementation uses
-  // `domcontentloaded` + best-effort `load` wait; a fast navigation is
-  // naturally covered by the goto call itself.
-  navigate(url: string, timeoutMs: number, signal?: AbortSignal): Promise<PwNavigation>
-  goBack(timeoutMs: number, signal?: AbortSignal): Promise<PwNavigation>
-  goForward(timeoutMs: number, signal?: AbortSignal): Promise<PwNavigation>
-  reload(timeoutMs: number, signal?: AbortSignal): Promise<PwNavigation>
-
-  // ── Page primitives ────────────────────────────────────────────────────
-  waitLoad(): Promise<void>
-  /** Double-rAF settle so a freshly-painted page is captured. */
-  settleRaf(): Promise<void>
   /**
    * Mutation-aware settle (B8): resolves when the document is ready AND no
    * DOM mutations have occurred for a short quiet window, bounded by a hard
@@ -246,28 +242,4 @@ export interface BrowserDriver {
    * asynchronously after an action, yet never runs longer than `timeoutMs`.
    */
   settleStable(timeoutMs: number): Promise<void>
-  title(): Promise<string>
-  url(): string
-  eval<T = unknown>(expr: string): Promise<T>
-  scrollTo(x: number, y: number): Promise<void>
-  scrollBy(x: number, y: number): Promise<void>
-  scrollPos(): Promise<{ x: number; y: number }>
-  keyboardPress(key: string): Promise<void>
-  screenshot(opts: { type: string; quality?: number }): Promise<Buffer>
-  /** PDF bytes for the current page. */
-  pdf(opts: { format: string; printBackground: boolean }): Promise<Buffer>
-
-  // ── Locator helpers (frame-aware + wait-to-actionable) ─────────────────
-  resolveFrameAware(selector?: string, text?: string): Promise<PwLocator>
-  waitForLocator(locator: PwLocator, timeoutMs: number): Promise<void>
-  clickLocator(locator: PwLocator): Promise<void>
-  hoverLocator(locator: PwLocator): Promise<void>
-  fillLocator(locator: PwLocator, text: string): Promise<void>
-  clearLocator(locator: PwLocator): Promise<void>
-
-  // ── Context operations ─────────────────────────────────────────────────
-  cookies(): Promise<PwCookie[]>
-  clearCookies(): Promise<void>
-  addCookies(cookies: Array<{ name: string; value: string; url?: string; domain?: string; path?: string }>): Promise<void>
-  requestGet(url: string, timeoutMs: number): Promise<PwApiResponse>
 }
