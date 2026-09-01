@@ -61,6 +61,19 @@ export interface ToolDefinition {
 
 /** Wrap a successful value into the unified envelope. */
 function ok<T>(value: T, usage?: Usage): ResultEnvelope<T> {
+  // Lossless-JSON boundary (dsh-session/json): JSON.stringify silently drops
+  // undefined-valued keys — their presence makes the object round-trip unequal
+  // and the harness rejects the tool result as "not losslessly JSON". Callers
+  // pass optional fields that legitimately stay absent (e.g.
+  // visionUnavailableReason when vision succeeded); strip them here so every
+  // tool result survives the boundary.
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    for (const key of Object.keys(value)) {
+      if ((value as Record<string, unknown>)[key] === undefined) {
+        delete (value as Record<string, unknown>)[key]
+      }
+    }
+  }
   return usage !== undefined ? { ok: true, value, usage } : { ok: true, value }
 }
 
