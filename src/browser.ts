@@ -371,13 +371,17 @@ export class BrowserSession implements PageOpsHost {
     // route is usable, so the agent sees WHY vision may be off instead of a bare
     // `vision-unavailable`. Only config/env drive this (no API-key probe), so it
     // is always safe to surface.
-    const provider = resolveProvider(this.config.visionMode === 'deepseek-file-api', this.env.providerOverride)
+    const visionMode = this.config.visionMode
+    const isOff = visionMode === 'off'
+    const provider = resolveProvider(visionMode === 'deepseek-file-api', this.env.providerOverride)
     const route = resolveRoute(provider, { baseUrl: this.env.baseUrlOverride, model: this.env.modelOverride })
     const cap = detectCapability(provider, route.defaultModel, this.config.providers)
     const missingBaseUrl = !hasRoutableBaseUrl(provider, this.env.baseUrlOverride)
-    const visionReason = missingBaseUrl
-      ? 'missing-dsh-tui-browser-base-url'
-      : (!cap.supportsVision ? 'provider-not-vision-capable' : undefined)
+    const visionReason = isOff
+      ? 'vision-off'
+      : missingBaseUrl
+        ? 'missing-dsh-tui-browser-base-url'
+        : (!cap.supportsVision ? 'provider-not-vision-capable' : undefined)
 
     return {
       available,
@@ -390,10 +394,10 @@ export class BrowserSession implements PageOpsHost {
         degraded: this.degraded,
       },
       vision: {
-        mode: this.config.visionMode,
+        mode: visionMode,
         provider,
         model: route.defaultModel,
-        available: cap.supportsVision && !missingBaseUrl,
+        available: !isOff && cap.supportsVision && !missingBaseUrl,
         ...(visionReason ? { reason: visionReason } : {}),
       },
     }

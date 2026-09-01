@@ -436,7 +436,7 @@ export interface StatusVision {
   /** Whether the vision path is currently usable (no API-key probe). */
   available: boolean
   /** Machine-readable reason when `available` is false. */
-  reason?: 'missing-dsh-tui-browser-base-url' | 'provider-not-vision-capable'
+  reason?: 'vision-off' | 'missing-dsh-tui-browser-base-url' | 'provider-not-vision-capable'
 }
 
 /** `browser.status` result. */
