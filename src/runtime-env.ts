@@ -57,8 +57,10 @@ export interface RuntimeEnv {
   navTimeoutMs: number
   actionTimeoutMs: number
   settleTimeoutMs: number
-  /** Tiling fallback cap (config takes precedence over this). */
-  maxTiles: number
+  /** Tiling fallback cap (config takes precedence over this).
+   * Lazily re-read from env on every access (a `/settings` edit to
+   * `tiling.maxTiles` takes effect mid-session). Read-only by contract. */
+  readonly maxTiles: number
 
   // ── Output safety ───────────────────────────────────────────────────────
   sensitiveQueryKeys: string[]
