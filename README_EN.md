@@ -8,10 +8,10 @@
 
 ## Features
 
-- **21 tools**: browsing, interaction, observation, structured extraction, natural-language multi-step tasks, file download, and more.
-- **Super-assembly tiling**: tuned for the strict compression of DeepSeek's official vision backend; tall or wide pages are automatically captured in scroll segments / column splits with truncation reporting, keeping recognition accuracy high.
-- **Session**: session-profile & login-state management (`session.mode` persistent / isolated, lock file for concurrency, conflict auto-degrades to a fresh ephemeral profile, whole directory is packable/migratable), dialog policy, serialized mutex, navigation/action/settle timeouts.
-- **Security**: vision prompt-injection fencing (`<task>` delimiters, screenshots treated as untrusted content), URL/sensitive-query/cookie redaction; **navigation and downloads reject `file:` and cloud-metadata/link-local URLs by default** (`DSH_TUI_BROWSER_ALLOW_UNSAFE_URL=1` to relax), writes are contained to workspace/temp unless `DSH_TUI_BROWSER_WRITE_ANY=1`. **Running as root/container (uid===0) automatically injects chromium `--no-sandbox` and related container args** (an implicit security downgrade; force with `DSH_TUI_BROWSER_NO_SANDBOX=1`, see the env table).
+- **21 tools**: 21 atomic `browser_*` tools covering navigation, interaction, DOM snapshot & extraction, vision analysis, and multi-step autonomous tasks.
+- **Super-assembly tiling**: tuned for DeepSeek's vision compression limits; tall or wide pages are automatically scroll-split, sliced, and resolution-preserved so key information is not lost to compression.
+- **Session**: persistent login profiles and one-shot isolated sessions, with a built-in concurrency lock and conflict-degradation mechanism, plus packable cross-device migration.
+- **Security**: built-in vision prompt-injection fencing and sensitive-parameter redaction; `file:` and SSRF (cloud metadata) are rejected by default, and file writes are strictly confined to the workspace.
 - **Browser engines**: chromium (bundled, cross-platform) / firefox / webkit; config editable in the dsh-tui `/settings` panel.
 
 ## Architecture
@@ -132,19 +132,17 @@ npm run test:integration # live browser integration (navigate/click/type/screens
 npm run test:storage-state # storageState corruption fallback + persistent import (live browser)
 ```
 
-## Programmatic use / extension points
+## Architecture extension points
 
-The plugin exposes a small programming surface so a host or third party can drive the browser or swap a backend without touching the tool registries.
+The plugin's core logic is fully decoupled from the underlying browser driver and never exposes a raw `page` / `context` handle.
 
-- **Browser backend**: `BrowserSession` is constructed with a `BrowserDriver` (default `PlaywrightDriver`). The seam is a **full backend abstraction**: it is the sole Playwright boundary, owning launch/close and page settling (`settleStable`), and it collapses all page operations — navigation, interaction, screenshot, PDF, download, cookies — into semantic methods (`goto`/`goBack`/`click`/`fill`/`evaluate`/`screenshot`/`pdf`/`requestGet`…). `BrowserSession`/page-ops drive the browser only through it and never see a raw `page`/`context` handle — so a non-Playwright backend can be swapped in wholesale. `dsh-tui-browser-use/driver` exports both the `BrowserDriver` contract and the `createPlaywrightDriver()` default implementation; to swap backends, inject a custom driver satisfying that contract.
-- **Vision transport**: `createVisionAdapter(env, runtimeEnv)` returns the adapter for the resolved image-transfer mode (`file` → DeepSeek Files-API; `base64`/`url` → OpenAI-compatible inline). Swappable at `dsh-tui-browser-use/vision`.
-- **Tool registration**: `buildToolDefinitions(deps)` / `registerTools(ctx, deps)` registries accept an injected session + vision resolver, so a host can wrap or extend them.
+- **Swap the browser backend**: `BrowserSession` depends only on the `BrowserDriver` abstraction. To plug in a non-Playwright backend (e.g. Puppeteer or a standalone CDP connection), implement that contract and inject your implementation via `dsh-tui-browser-use/driver`.
+- **Custom vision routing**: via `createVisionAdapter` in `dsh-tui-browser-use/vision`, you can switch or extend the image-transport strategy (DeepSeek Files API and OpenAI-compatible base64 are supported by default).
+- **Tool extension**: via `registerTools` you can inject a custom session and vision resolver, so a host can wrap or intercept tool behavior.
 
-Subpath exports: `dsh-tui-browser-use/driver` (`BrowserDriver` contract + `createPlaywrightDriver()`), `dsh-tui-browser-use/vision` (`createVisionAdapter`), `dsh-tui-browser-use/types`. The tool count and the unified result envelope (`{ ok, value|error, usage? }`) are part of the contract and must not change.
+## Notes & feedback
 
-## Known limitations
-
-This project is a pure Vibe Coding product: implementation and the full regression suite are verified on headless Linux. Feedback — including hard scrutiny — is welcome.
+Implementation and the full regression suite are verified on headless Linux. If you hit edge-case issues or have suggestions, feel free to open an Issue / PR.
 
 ## Docs
 
