@@ -32,16 +32,47 @@ export function throwIfAborted(signal: AbortSignal | undefined): void {
  * does not accept an abort signal, so a `page.goto` to a hung host can outlive
  * the tool's wall-clock budget and get the tool hard-killed by the host instead
  * of returning its own envelope. The budget (`AbortSignal.timeout` composed in
- * `abortSignalOf`) fires first → we surface `timed-out` and discard the stale
- * Playwright promise; the session is still serialized, so a leftover operation
- * cannot interleave with the next tool.
+ * `abortSignalOf`) fires first → we surface `timed-out` and, via the optional
+ * `cancel` callback, cancels the underlying op (the driver closes the page it
+ * ran on) so it cannot keep mutating a page the session has already released.
+ *
+ * 审核 P1-2 (fully fixed): without a `cancel` hook the underlying Playwright
+ * promise would be left running after the session queue advanced, so a stale
+ * navigation/eval could interleave with the next tool on the same page. The
+ * driver passes a `cancel` that quarantines the op (discard the page it ran on);
+ * the session then lazily provisions a fresh page for the next call, preserving
+ * serialization. `cancel` is only invoked when the abort actually wins the race
+ * (i.e. `p` has NOT already settled), so a healthy page is never torn down just
+ * because the abort fired a moment after the op finished.
  */
-export function raceAbort<T>(p: Promise<T>, signal: AbortSignal | undefined, message = 'operation aborted before dispatch'): Promise<T> {
+export function raceAbort<T>(p: Promise<T>, signal: AbortSignal | undefined, message = 'operation aborted before dispatch', cancel?: () => void): Promise<T> {
   if (!signal) return p
+  // The abort may already have fired (e.g. a budget that elapsed between the
+  // caller's `throwIfAborted` and this race). `addEventListener` does NOT fire
+  // retroactively on an already-aborted signal, so without this guard the
+  // promise would never settle and the stale op would never be quarantined.
+  if (signal.aborted) {
+    // The op (`p`) is already in-flight; quarantine it and swallow its eventual
+    // rejection. Without attaching a handler here the page close (from `cancel`)
+    // would reject `p` and surface as an unhandledRejection.
+    p.catch(() => undefined)
+    cancel?.()
+    return Promise.reject(new BrowserToolError('timed-out', message))
+  }
   return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(new BrowserToolError('timed-out', message))
+    let settled = false
+    const onAbort = () => {
+      if (settled) return
+      reject(new BrowserToolError('timed-out', message))
+      // Quarantine the stale op AFTER the envelope rejects, so the tool's own
+      // `timed-out` surface is not affected by the cancellation cost.
+      cancel?.()
+    }
     signal.addEventListener('abort', onAbort, { once: true })
-    p.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort))
+    p.then(
+      (v) => { settled = true; resolve(v) },
+      (e) => { settled = true; reject(e) },
+    ).finally(() => signal.removeEventListener('abort', onAbort))
   })
 }
 

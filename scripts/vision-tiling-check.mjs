@@ -8,38 +8,28 @@
  * and the vision model reads ALL tiles together and stitches them into a page
  * understanding.
  *
- * Key is read from the running container dsh-tui process environ (not printed).
+ * Key is resolved by scripts/key-probe.mjs across every channel a standalone
+ * process can reach (process.env → $DSH_HOME/.credentials.yaml → .env → a live
+ * dsh-tui process environ); used in-memory, never logged in full.
  *
  * Usage: node scripts/vision-tiling-check.mjs
  */
 
 import assert from 'node:assert/strict'
-import { readdirSync, readFileSync, writeFileSync, mkdtempSync } from 'node:fs'
+import { writeFileSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { probeApiKey } from './key-probe.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const log = (...a) => process.stderr.write('[vision-tiling] ' + a.join(' ') + '\n')
 
-function dshApiKey() {
-  if (process.env.DEEPSEEK_API_KEY) return process.env.DEEPSEEK_API_KEY
-  for (const pid of readdirSync('/proc')) {
-    if (!/^\d+$/.test(pid)) continue
-    try {
-      const cmd = readFileSync(`/proc/${pid}/cmdline`, 'utf8')
-      if (!cmd.includes('--profile') || !cmd.includes('dsh-tui')) continue
-      const env = readFileSync(`/proc/${pid}/environ`, 'utf8')
-      const hit = env.split('\0').find((s) => s.startsWith('DEEPSEEK_API_KEY='))
-      if (hit) { log(`found key in pid ${pid}`); return hit.slice('DEEPSEEK_API_KEY='.length) }
-    } catch { /* gone */ }
-  }
-  return null
-}
-
 async function main() {
-  const key = dshApiKey()
-  if (!key) { console.error('[vision-tiling] ERROR: no key in dsh-tui process'); process.exit(2) }
+  // P0-3: deliberate local `file://` fixture → opt in to the SSRF relaxation.
+  process.env.DSH_TUI_BROWSER_ALLOW_UNSAFE_URL = '1'
+  const key = probeApiKey('DEEPSEEK_API_KEY', { log })
+  if (!key) { console.error('[vision-tiling] ERROR: no key reachable from this standalone process (checked process.env, $DSH_HOME/.credentials.yaml, .env, and a live dsh-tui process environ). Export DEEPSEEK_API_KEY or store it in ~/.dsh/.credentials.yaml to run this test.'); process.exit(2) }
 
   const { BrowserSession } = await import(join(root, 'lib/types/browser.js') + '?t=' + Date.now())
   const { analyzeImages } = await import(join(root, 'lib/types/vision.js') + '?t=' + Date.now())

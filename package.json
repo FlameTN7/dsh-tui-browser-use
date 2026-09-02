@@ -48,10 +48,11 @@
     "node": "^22.19 || >=24"
   },
   "scripts": {
-    "clean": "rm -rf lib",
+    "clean": "node scripts/clean.mjs",
     "compile": "npm run clean && tsc -p tsconfig.json",
     "build": "npm run compile",
     "prepack": "npm run build",
+    "prepare": "npm run build",
     "check": "npm run build && npm run smoke && npm run verify:manifest && npm run verify:i18n && npm run router:check",
     "postinstall": "node scripts/postinstall.mjs",
     "smoke": "node --import tsx/esm scripts/smoke.ts",
@@ -61,6 +62,7 @@
     "test:snapshot-delta": "node --import tsx/esm scripts/snapshot-delta-check.ts",
     "test:storage-state": "node --import tsx/esm scripts/storage-state-fallback-check.mjs",
     "test:container": "node scripts/container-register-check.mjs",
+    "test:p12-abort": "node --import tsx/esm scripts/p12-abort-check.mjs",
     "test:tiling-defects": "node --import tsx/esm scripts/tiling-defect-check.ts",
     "test:vision": "node scripts/vision-check.mjs",
     "test:vision-cache": "node scripts/vision-cache-check.mjs",
@@ -79,11 +81,15 @@
     "verify:i18n": "node --import tsx/esm scripts/verify-i18n.mjs"
   },
   "dependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/schemastery": "^3.18.1",
     "playwright": "^1.49.0"
   },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
   "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/schemastery": "^3.18.1",
     "@dsh-std/manifest": "^0.1.1-rc.1",
     "@types/node": "^22.0.0",
     "tsx": "^4.0.0",

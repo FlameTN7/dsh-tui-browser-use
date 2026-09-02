@@ -109,7 +109,7 @@ export function estimateUsage(env: RuntimeEnv, model: string, visionMode: Vision
   const completionTokens = Math.ceil(textLength / 8)
   const rates = costRates(env)
   const costUsd = (promptTokens * rates.input + completionTokens * rates.output) / 1_000_000
-  const costCny = costUsd * 7.2
+  const costCny = costUsd * env.cnyUsdRate
   return { model, visionMode, imagesSent, promptTokens, completionTokens, promptCacheHitTokens: 0, promptCacheMissTokens: promptTokens, costUsd, costCny }
 }
 
@@ -119,7 +119,7 @@ export function costFromUsage(env: RuntimeEnv, promptTokens: number, completionT
   const hit = Math.max(0, Math.min(cacheHitTokens, promptTokens))
   const miss = promptTokens - hit
   const costUsd = (miss * rates.input + hit * rates.cacheHit + completionTokens * rates.output) / 1_000_000
-  return { costUsd, costCny: costUsd * 7.2 }
+  return { costUsd, costCny: costUsd * env.cnyUsdRate }
 }
 
 export function baseUrlOf(env: VisionEnvLike): string {

@@ -154,6 +154,10 @@ export const dict: I18nDict = {
     zh: '下载失败: {{message}}',
     en: 'Download failed: {{message}}',
   },
+  'error.write-outside-workspace': {
+    zh: '写入路径超出允许范围: {{path}}。默认只允许写入工作区/CWD 与临时目录；如需放开请设置 DSH_TUI_BROWSER_WRITE_ANY=1。',
+    en: 'Write path outside the allowed workspace: {{path}}. By default only CWD/workspace and the temp directory may be written; set DSH_TUI_BROWSER_WRITE_ANY=1 to allow arbitrary paths.',
+  },
 
   // ── screenshot insight ─────────────────────────────────────────────────
   'screenshot.insight.empty': {

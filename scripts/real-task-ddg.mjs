@@ -12,9 +12,9 @@
  */
 
 import assert from 'node:assert/strict'
-import { readdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { probeApiKey } from './key-probe.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const entry = join(root, 'lib/types/index.js') + '?t=' + Date.now()
@@ -22,23 +22,9 @@ const log = (...a) => process.stderr.write('[real-task-ddg] ' + a.join(' ') + '\
 
 const PROXY = process.env.DSH_TUI_BROWSER_PROXY
 
-async function dshApiKey() {
-  if (process.env.DEEPSEEK_API_KEY) return process.env.DEEPSEEK_API_KEY
-  for (const pid of readdirSync('/proc').filter((d) => /^\d+$/.test(d))) {
-    try {
-      const cmd = readFileSync(`/proc/${pid}/cmdline`, 'utf8')
-      if (!cmd.includes('--profile') || !cmd.includes('dsh-tui')) continue
-      const env = readFileSync(`/proc/${pid}/environ`, 'utf8')
-      const hit = env.split('\0').find((s) => s.startsWith('DEEPSEEK_API_KEY='))
-      if (hit) return hit.slice('DEEPSEEK_API_KEY='.length)
-    } catch { /* pid vanished */ }
-  }
-  return null
-}
-
 async function main() {
-  const key = await dshApiKey()
-  if (!key) { console.error('[real-task-ddg] ERROR: no DEEPSEEK_API_KEY'); process.exit(2) }
+  const key = probeApiKey('DEEPSEEK_API_KEY', { log })
+  if (!key) { console.error('[real-task-ddg] ERROR: no DEEPSEEK_API_KEY reachable from this standalone process (checked process.env, $DSH_HOME/.credentials.yaml, .env, and a live dsh-tui process environ). Export DEEPSEEK_API_KEY or store it in ~/.dsh/.credentials.yaml to run this test.'); process.exit(2) }
   if (!PROXY) { console.error('[real-task-ddg] ERROR: set DSH_TUI_BROWSER_PROXY to an HTTP proxy'); process.exit(2) }
   process.env.DSH_TUI_BROWSER_PROXY = PROXY
 

@@ -57,6 +57,9 @@ function fixturePage(): string {
 }
 
 async function main() {
+  // P0-3: these are deliberate local `file://` fixtures, so opt in to the SSRF
+  // relaxation before the session reads its runtime env.
+  process.env.DSH_TUI_BROWSER_ALLOW_UNSAFE_URL = '1'
   const executable = process.env.DSH_TUI_BROWSER_EXECUTABLE ?? ''
   const config = defaultConfig()
   const session = new BrowserSession(config, 'zh')

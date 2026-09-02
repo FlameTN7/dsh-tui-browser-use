@@ -11,7 +11,7 @@
 - **21 tools**: browsing, interaction, observation, structured extraction, natural-language multi-step tasks, file download, and more.
 - **Super-assembly tiling**: tuned for the strict compression of DeepSeek's official vision backend; tall or wide pages are automatically captured in scroll segments / column splits with truncation reporting, keeping recognition accuracy high.
 - **Session**: session-profile & login-state management (`session.mode` persistent / isolated, lock file for concurrency, conflict auto-degrades to a fresh ephemeral profile, whole directory is packable/migratable), dialog policy, serialized mutex, navigation/action/settle timeouts.
-- **Security**: vision prompt-injection fencing (`<task>` delimiters, screenshots treated as untrusted content), URL/sensitive-query/cookie redaction, sandbox flags gated by need.
+- **Security**: vision prompt-injection fencing (`<task>` delimiters, screenshots treated as untrusted content), URL/sensitive-query/cookie redaction; **navigation and downloads reject `file:` and cloud-metadata/link-local URLs by default** (`DSH_TUI_BROWSER_ALLOW_UNSAFE_URL=1` to relax), writes are contained to workspace/temp unless `DSH_TUI_BROWSER_WRITE_ANY=1`. **Running as root/container (uid===0) automatically injects chromium `--no-sandbox` and related container args** (an implicit security downgrade; force with `DSH_TUI_BROWSER_NO_SANDBOX=1`, see the env table).
 - **Browser engines**: chromium (bundled, cross-platform) / firefox / webkit; config editable in the dsh-tui `/settings` panel.
 
 ## Architecture
@@ -55,6 +55,8 @@
 npm install dsh-tui-browser-use
 npx playwright install chromium --with-deps   # Linux; omit --with-deps on Windows/macOS
 ```
+
+> Compatibility: this plugin targets **dsh-tui v0.10.0-beta.4 and above** (the current review baseline) and depends on its harness services `tools` / `credentials` / `settings` / `tuiSettingsSections` / `skills`.
 
 Mount it in the dsh-tui profile's `cordis.patch.yml`:
 
@@ -101,6 +103,12 @@ Common settings can also be overridden via environment variables; some take effe
 | `DSH_TUI_BROWSER_PROXY` / `_PROXY_BYPASS` | Outbound proxy (read at browser startup) | none |
 | `DSH_TUI_BROWSER_TIMEOUT_NAVIGATION` / `_ACTION` / `_SETTLE` | Navigation / action / settle timeouts (ms) | 45000 / 12000 / 6000 |
 | `DSH_TUI_BROWSER_USER_DATA_DIR` / `_STORAGE_STATE` | External session dir / login-state snapshot (falls back to a fresh session on failure) | built-in profile root |
+| `DSH_TUI_BROWSER_NO_SANDBOX` | Force-inject `--no-sandbox`; when unset the chromium container args are auto-injected only for root/container (uid===0) | auto (root/container only) |
+| `DSH_TUI_BROWSER_WORKSPACE` | Extra workspace root permitted for writes (alongside CWD/temp) | none (CWD/temp only) |
+| `DSH_TUI_BROWSER_WRITE_ANY` | `1` opts out of the write containment (security opt-in; refuses writes outside the workspace by default) | `0` |
+| `DSH_TUI_BROWSER_ALLOW_UNSAFE_URL` | `1` relaxes the URL policy (`file:` / cloud-metadata/link-local), so `browser_navigate` may also visit `file:` (whose download is now read locally); navigation and downloads reject these by default | `0` |
+| `DSH_TUI_BROWSER_MAX_DOWNLOAD_BYTES` | Max bytes buffered per `browser_download` (over-limit returns `response too large`) | 100MB |
+| `DSH_TUI_BROWSER_CNY_USD_RATE` | USD→CNY rate for cost estimation | 7.2 |
 
 ## Vision pipeline (brief)
 

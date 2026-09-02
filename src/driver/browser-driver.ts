@@ -109,6 +109,8 @@ export interface PwPage {
   reload(opts?: { waitUntil?: string; timeout?: number }): Promise<{ status(): number | null; url(): string } | null>
   pdf(opts?: { format?: string; printBackground?: boolean; path?: string }): Promise<Buffer>
   keyboard: PwKeyboard
+  /** Close this page. Cancels in-flight operations on it (used to quarantine a stale op after a cooperative abort, P1-2). */
+  close(): Promise<void>
   on(event: 'dialog', handler: (dialog: PwDialog) => void): void
   on(event: 'console', handler: (message: PwConsoleMessage) => void): void
   on(event: 'request', handler: (request: PwRequest) => void): void

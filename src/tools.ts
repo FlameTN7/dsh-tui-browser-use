@@ -717,10 +717,10 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       output: { schema: envelopeSchema(), render: renderUntrusted },
       timeoutMs: 15_000,
       isConcurrencySafe: () => false,
-      async execute(args: unknown): Promise<ResultEnvelope<SnapshotResult>> {
+      async execute(args: unknown, exec?: unknown): Promise<ResultEnvelope<SnapshotResult>> {
         const p = (args ?? {}) as SnapshotParams
         try {
-          return ok(await session.snapshot(p))
+          return ok(await session.snapshot(p, abortSignalOf(exec, deps.runtimeEnv.settleTimeoutMs, toolBudget(15_000))))
         } catch (err) { return fail(err) }
       },
     },
@@ -854,10 +854,10 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       output: { schema: envelopeSchema(), render: renderText },
       timeoutMs: 10_000,
       isConcurrencySafe: () => false,
-      async execute(args: unknown): Promise<ResultEnvelope<CookiesResult>> {
+      async execute(args: unknown, exec?: unknown): Promise<ResultEnvelope<CookiesResult>> {
         const p = (args ?? {}) as CookiesParams
         try {
-          return ok(await session.cookies(p))
+          return ok(await session.cookies(p, abortSignalOf(exec, deps.runtimeEnv.actionTimeoutMs, toolBudget(10_000))))
         } catch (err) { return fail(err) }
       },
     },
@@ -870,11 +870,13 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       }),
       output: { schema: envelopeSchema(), render: renderUntrusted },
       timeoutMs: 5_000,
-      isConcurrencySafe: () => true,
-      async execute(args: unknown): Promise<ResultEnvelope<ConsoleMessagesResult>> {
+      // clear:true clears the shared ring buffer, so it is NOT concurrency-safe
+      // (the registry still serializes every call through session.run()).
+      isConcurrencySafe: () => false,
+      async execute(args: unknown, exec?: unknown): Promise<ResultEnvelope<ConsoleMessagesResult>> {
         const p = (args ?? {}) as ConsoleMessagesParams
         try {
-          return ok(await session.consoleMessages(p))
+          return ok(await session.consoleMessages(p, abortSignalOf(exec, deps.runtimeEnv.actionTimeoutMs, toolBudget(5_000))))
         } catch (err) { return fail(err) }
       },
     },
@@ -887,11 +889,13 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       }),
       output: { schema: envelopeSchema(), render: renderUntrusted },
       timeoutMs: 5_000,
-      isConcurrencySafe: () => true,
-      async execute(args: unknown): Promise<ResultEnvelope<NetworkRequestsResult>> {
+      // clear:true clears the shared ring buffer, so it is NOT concurrency-safe
+      // (the registry still serializes every call through session.run()).
+      isConcurrencySafe: () => false,
+      async execute(args: unknown, exec?: unknown): Promise<ResultEnvelope<NetworkRequestsResult>> {
         const p = (args ?? {}) as NetworkRequestsParams
         try {
-          return ok(await session.networkRequests(p))
+          return ok(await session.networkRequests(p, abortSignalOf(exec, deps.runtimeEnv.actionTimeoutMs, toolBudget(5_000))))
         } catch (err) { return fail(err) }
       },
     },
@@ -907,10 +911,10 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       output: { schema: envelopeSchema(), render: renderText },
       timeoutMs: 30_000,
       isConcurrencySafe: () => false,
-      async execute(args: unknown): Promise<ResultEnvelope<PdfResult>> {
+      async execute(args: unknown, exec?: unknown): Promise<ResultEnvelope<PdfResult>> {
         const p = (args ?? {}) as PdfParams
         try {
-          return ok(await session.pdf(p))
+          return ok(await session.pdf(p, abortSignalOf(exec, deps.runtimeEnv.navTimeoutMs, toolBudget(30_000))))
         } catch (err) { return fail(err) }
       },
     },

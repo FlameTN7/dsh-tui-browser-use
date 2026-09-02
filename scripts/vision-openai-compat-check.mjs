@@ -23,6 +23,9 @@ import { dirname, join } from 'node:path'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const log = (...a) => process.stderr.write('[vision-openai-compat] ' + a.join(' ') + '\n')
 
+// P0-3: deliberate local `file://` fixture → opt in to the SSRF relaxation.
+process.env.DSH_TUI_BROWSER_ALLOW_UNSAFE_URL = '1'
+
 /** Read the API key (never printed): env first, then DSH_CREDENTIALS_FILE. */
 function apiKey() {
   if (process.env.OPENAI_API_KEY) return process.env.OPENAI_API_KEY

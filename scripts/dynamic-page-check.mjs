@@ -25,6 +25,9 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const entry = join(root, 'lib/types/browser.js') + '?t=' + Date.now()
 const log = (...a) => process.stderr.write('[dynamic] ' + a.join(' ') + '\n')
 
+// P0-3: deliberate local `file://` fixture → opt in to the SSRF relaxation.
+process.env.DSH_TUI_BROWSER_ALLOW_UNSAFE_URL = '1'
+
 async function main() {
   const { BrowserSession } = await import(entry)
 

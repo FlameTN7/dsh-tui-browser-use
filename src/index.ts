@@ -15,7 +15,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { Context } from '@deepseek-ai/cordis'
+import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import { BrowserSession } from './browser.js'
 import { registerTools } from './tools/registry.js'
@@ -54,8 +54,8 @@ function browserUseSchemaFields() {
     // Real viewport (CSS px). `screenshot.maxDimension` remains as a deprecated
     // back-compat alias for the same thing (P0-03).
     viewport: Schema.object({
-      width: Schema.number().min(1).default(1024),
-      height: Schema.number().min(1).default(768),
+      width: Schema.number().min(1).max(8192).default(1024),
+      height: Schema.number().min(1).max(8192).default(768),
     }).required(false),
     screenshot: Schema.object({
       format: Schema.union(['jpeg', 'png'] as const).default('jpeg'),
@@ -66,7 +66,7 @@ function browserUseSchemaFields() {
       mode: Schema.union(['auto', 'on', 'off'] as const).default('auto'),
       threshold: Schema.string().default('1200x1200'),
       overlap: Schema.number().min(0).default(60),
-      maxTiles: Schema.number().min(1).default(24),
+      maxTiles: Schema.number().min(1).max(128).default(24),
     }),
     providers: Schema.array(Schema.object({
       provider: Schema.string().required(),
@@ -83,7 +83,12 @@ function browserUseSchemaFields() {
     // `mode` picks a managed profile; `profile` names the directory under the
     // profile root (validated as one safe path segment).
     session: Schema.object({
-      mode: Schema.union(['persistent', 'isolated'] as const).default('isolated'),
+      // NOTE: `mode` intentionally has NO default. A real Cordis config that
+      // omits `session` is normalized by schemastery into `{}` (or the object is
+      // absent); without a mode default it falls through to the historical
+      // `external` branch in `resolveSession`, matching the documented default
+      // instead of silently becoming `isolated` (审核 M6).
+      mode: Schema.union(['persistent', 'isolated'] as const),
       profile: Schema.string().default('default'),
     }).required(false),
   }
@@ -124,16 +129,21 @@ function defaultLang(ctx: Context): 'zh' | 'en' {
  * fatal — it logs (in debug) and lets the rest of the plugin boot.
  */
 function registerPackagedSkill(ctx: Context, debug: (msg: string) => void): void {
-  // The skill registry may mount AFTER this plugin's `apply` (R-10): a single
+  // The skill registry may mount AFTER this plugin's `apply` (R-10), so a bare
   // probe at apply time would permanently skip registration when the hosting
-  // tree inserts the skills service in a later fiber. Probe now, then re-probe
-  // once on the microtask queue (same tick, after sibling services settle).
-  // `ctx.inject` is not required for the skills seam (it's soft-probed), so a
-  // host without a registry is just silently skipped on both attempts.
+  // tree inserts the skills service in a later fiber. Use `ctx.inject(['skills'])`
+  // (same pattern as the settings seam) so Cordis runs this callback once the
+  // `skills` service is actually available — no microtask probe window, no
+  // silent permanent skip (审核 M5).
+  if (typeof ctx.inject !== 'function') {
+    debug('ctx.inject unavailable; browser-bridge skill not registered')
+    return
+  }
   let registered = false
-  const tryRegister = (): void => {
+  ctx.inject(['skills'], (skillsCtx) => {
     if (registered) return
-    const registry = ctx.get('skills', false) as { register?: (s: { name: string; description: string; content: string; path?: string; source?: string }) => void } | undefined
+    const registry = (skillsCtx.get('skills') ?? (skillsCtx as { skills?: unknown }).skills) as
+      { register?: (s: { name: string; description: string; content: string; path?: string; source?: string }) => void } | undefined
     if (!registry?.register) {
       debug('skills registry unavailable; browser-bridge skill not registered')
       return
@@ -164,15 +174,13 @@ function registerPackagedSkill(ctx: Context, debug: (msg: string) => void): void
         debug('browser-bridge SKILL frontmatter missing name/description; skill not registered')
         return
       }
-      registry.register({ name, description, content, path: skillFile, source: 'dsh-tui-browser-use' })
+      registry.register({ name, description, content, path: skillFile, source: 'bundled' })
       registered = true
       debug(`browser-bridge skill registered: name=${name}`)
     } catch (err) {
       debug(`browser-bridge skill register failed: ${err instanceof Error ? err.message : String(err)}`)
     }
-  }
-  tryRegister()
-  queueMicrotask(tryRegister)
+  })
 }
 
 // ── apply ────────────────────────────────────────────────────────────────
@@ -218,8 +226,9 @@ export function apply(ctx: Context, config: Config): void {
   // Resolve the vision request environment from the provider route table +
   // harness credentials. Provider/model can be overridden by env vars
   // (DSH_TUI_BROWSER_PROVIDER / _MODEL / _BASE_URL); the API key comes from
-  // `ctx.credentials.resolve({ env: apiKeyEnv })` (async), falling back to env
-  // vars. Missing key degrades vision to DOM (null).
+  // `probeSecretAsync(ctx, apiKeyEnvs)` (async, via the harness credentials
+  // seam), falling back to env only when no credentials service exists.
+  // Missing key degrades vision to DOM (null).
   const resolveVisionEnv = async (): Promise<VisionEnv | null> => {
     const visionMode = effective.visionMode
     if (visionMode === 'off') return null
@@ -395,7 +404,11 @@ export function apply(ctx: Context, config: Config): void {
   debug(`plugin apply complete (visionMode=${config.visionMode})`)
 }
 
-export default { name, inject, Config, apply }
+// 审核 M3: 刻意不提供 default 导出。生态约定（参考实现 dsh-working-activity）
+// 使用命名导出，模块命名空间本身就是插件对象（`name`/`inject`/`Config`/`apply`
+// 已各自具名导出）。消费者用 `import * as plugin from 'dsh-tui-browser-use'`
+// 解析，而非 `import plugin from`；`smoke`/`container-register-check` 等均按
+// `mod.default ?? mod` 兼容两种形态。
 
 // ── Public programming surface (B1) ──────────────────────────────────────
 // Third parties / the harness can drive the plugin programmatically or extend

@@ -18,7 +18,7 @@
  *
  * The only env reads legitimately OUTSIDE this module are the harness-boundary
  * aspects that must stay in index.ts: the async credentials seam
- * (`ctx.credentials.resolve({ env })`, AGENTS.md §6) and the host UI language
+ * (`probeSecretAsync(ctx, envKeys)`, AGENTS.md §6) and the host UI language
  * (`DSH_TUI_LANG`), which is a harness concern, not plugin config.
  */
 
@@ -64,11 +64,19 @@ export interface RuntimeEnv {
 
   // ── Output safety ───────────────────────────────────────────────────────
   sensitiveQueryKeys: string[]
+  /** Allow writes outside CWD/workspace/tmp (security opt-in, H1/P0-2). */
+  writeAny: boolean
+  /** Extra allowed write root (defaults to process.cwd()); helps containment. */
+  writeWorkspace: string | undefined
+  /** Allow `file:` downloads / cloud-metadata URLs (security opt-in, P0-3). */
+  allowUnsafeUrl: boolean
 
   // ── Vision cost / file-lifetime ─────────────────────────────────────────
   inputRate: number
   outputRate: number
   cacheHitRate: number
+  /** USD→CNY exchange rate for cost estimation (default 7.2). */
+  cnyUsdRate: number
   /** `null` → permanent file (omit `expires_after`). */
   fileExpiresSeconds: number | null
 
@@ -77,6 +85,8 @@ export interface RuntimeEnv {
   modelOverride: string | undefined
   baseUrlOverride: string | undefined
   deepseekBaseUrl: string
+  /** Max bytes a single `browser_download` will buffer (P2-2). */
+  maxDownloadBytes: number
 
   // ── Diagnostics ─────────────────────────────────────────────────────────
   debug: boolean
@@ -156,16 +166,21 @@ export function loadRuntimeEnv(
     get maxTiles() { return positiveAttr(readEnv('DSH_TUI_BROWSER_MAX_TILES'), 24) },
 
     sensitiveQueryKeys: parseSensitiveKeys(readEnv('DSH_TUI_BROWSER_SENSITIVE_QUERY_KEYS')),
+    writeAny: readEnv('DSH_TUI_BROWSER_WRITE_ANY') === '1',
+    writeWorkspace: envOrUndefined(readEnv('DSH_TUI_BROWSER_WORKSPACE')),
+    allowUnsafeUrl: readEnv('DSH_TUI_BROWSER_ALLOW_UNSAFE_URL') === '1',
 
     inputRate: numAttr(readEnv('DSH_TUI_BROWSER_INPUT_RATE'), DEFAULT_RATES.input),
     outputRate: numAttr(readEnv('DSH_TUI_BROWSER_OUTPUT_RATE'), DEFAULT_RATES.output),
     cacheHitRate: numAttr(readEnv('DSH_TUI_BROWSER_CACHE_HIT_RATE'), DEFAULT_RATES.cacheHit),
+    cnyUsdRate: numAttr(readEnv('DSH_TUI_BROWSER_CNY_USD_RATE'), 7.2),
     fileExpiresSeconds: parseFileExpires(readEnv('DSH_TUI_BROWSER_FILE_EXPIRES_SECONDS')),
 
     providerOverride: envOrUndefined(readEnv('DSH_TUI_BROWSER_PROVIDER')),
     modelOverride: envOrUndefined(readEnv('DSH_TUI_BROWSER_MODEL')),
     baseUrlOverride: envOrUndefined(readEnv('DSH_TUI_BROWSER_BASE_URL')),
     deepseekBaseUrl: envOrUndefined(readEnv('DEEPSEEK_BASE_URL')) ?? '',
+    maxDownloadBytes: positiveAttr(readEnv('DSH_TUI_BROWSER_MAX_DOWNLOAD_BYTES'), 100 * 1024 * 1024),
 
     debug: envOrUndefined(readEnv('DSH_TUI_BROWSER_DEBUG')) !== undefined,
   }

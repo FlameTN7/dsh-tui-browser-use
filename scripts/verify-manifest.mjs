@@ -47,19 +47,27 @@ async function main() {
     process.exit(1)
   }
   let dshTui = null
-  if (dshTuiDir && existsSync(join(dshTuiDir, 'src/plugin-spec/registry.ts'))) {
-    try {
-      const registryMod = await import(
-        pathToFileURL(join(dshTuiDir, 'src/plugin-spec/registry.ts')).href
-        + '?t=' + Date.now(),
-      )
-      const validateMod = await import(
-        pathToFileURL(join(dshTuiDir, 'src/plugin-spec/validate.ts')).href
-        + '?t=' + Date.now(),
-      )
-      dshTui = { ...registryMod, ...validateMod }
-    } catch (e) {
-      console.warn(`[verify-manifest] WARN: dsh-tui semantic layer import failed: ${e.message}`)
+  if (dshTuiDir) {
+    // The host semantic-layer files moved across refactors (`src/plugin-spec/*`
+    // was removed; now `src/adapter/standard/*`). Try each known layout so the
+    // verifier keeps working without a hard-coded path (审核 P2-1).
+    const candidates = [
+      'src/plugin-spec',
+      'src/adapter/standard',
+      'src/dsh-adapter',
+    ]
+    for (const dir of candidates) {
+      const reg = join(dshTuiDir, dir, 'registry.ts')
+      const val = join(dshTuiDir, dir, 'validate.ts')
+      if (!existsSync(reg) || !existsSync(val)) continue
+      try {
+        const registryMod = await import(pathToFileURL(reg).href + '?t=' + Date.now())
+        const validateMod = await import(pathToFileURL(val).href + '?t=' + Date.now())
+        dshTui = { ...registryMod, ...validateMod }
+        break
+      } catch (e) {
+        console.warn(`[verify-manifest] WARN: dsh-tui semantic layer import failed: ${e.message}`)
+      }
     }
   }
 

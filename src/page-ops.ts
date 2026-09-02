@@ -12,13 +12,14 @@
  * sanitize, error envelope).
  */
 
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { t } from './i18n.js'
 import { effectiveViewport } from './capabilities.js'
 import { DEFAULT_MAX_IMAGE_BYTES } from './image-pipeline.js'
-import { requestUrl, displayUrl } from './download-url.js'
+import { requestUrl, displayUrl, unsafeUrlKind } from './download-url.js'
 import {
   throwIfAborted,
   splitSaveStem,
@@ -81,6 +82,53 @@ export class PageOps {
   constructor(private readonly host: PageOpsHost) {}
 
   /**
+   * Canonicalize the deepest EXISTING ancestor of `p` so a not-yet-created file
+   * (or a chain of symlinked parents) is still checked against the real path of
+   * the allowed roots. This blocks the symlink-escape variant of the H1/P0-2
+   * write containment (e.g. a link inside the workspace pointing at `/etc`).
+   */
+  private realAncestor(p: string): string {
+    let cur = p
+    while (!existsSync(cur)) {
+      const parent = dirname(cur)
+      if (parent === cur) return p
+      cur = parent
+    }
+    try { return realpathSync(cur) } catch { return cur }
+  }
+
+  /**
+   * Contain file writes to the workspace (CWD / `DSH_TUI_BROWSER_WORKSPACE`) and
+   * the OS temp dir unless explicitly allowed (H1/P0-2). Returns the RESOLVED
+   * absolute path so callers always write/report an absolute path. The check is
+   * done on the REAL path (via the deepest existing ancestor) so a symlink that
+   * resolves outside the allowed roots is rejected.
+   */
+  private assertWritablePath(p: string): string {
+    const target = resolve(p)
+    if (this.host.env.writeAny) return target
+    const roots = [process.cwd(), ...(this.host.env.writeWorkspace ? [this.host.env.writeWorkspace] : [])]
+    const tmp = tmpdir()
+    const targetReal = this.realAncestor(target)
+    const inAllowed = [...roots, tmp].some((root) => {
+      const resolved = resolve(root)
+      // For an EXISTING root, compare against its real path (symlinks inside a
+      // workspace cannot escape). For a not-yet-created root (e.g. a fresh
+      // `DSH_TUI_BROWSER_WORKSPACE`), there are no symlinks to worry about, so
+      // fall back to the resolved-path containment.
+      let real = resolved
+      let realOk = false
+      try { real = realpathSync(root); realOk = true } catch { /* root not yet created */ }
+      if (realOk) return targetReal === real || targetReal.startsWith(real + sep)
+      return target === resolved || target.startsWith(resolved + sep)
+    })
+    if (!inAllowed) {
+      throw new BrowserToolError('browser-error', t('error.write-outside-workspace', this.host.lang, { path: p }))
+    }
+    return target
+  }
+
+  /**
    * Capture a screenshot, dropping JPEG quality until the payload fits the byte
    * budget (capture-time compression, proposal §5.3). PNG is captured once and
    * the pipeline marks it `oversize`. The driver exposes a single `screenshot`
@@ -95,6 +143,27 @@ export class PageOps {
       if (last.length <= maxImageBytes) return last
     }
     return last ?? (await this.host.driver.screenshot({ type, quality }))
+  }
+
+  /**
+   * A minimal SSRF policy (P0-3), applied to BOTH `browser_navigate` and
+   * `browser_download`: block `file:` and cloud-metadata/link-local targets by
+   * default; loopback/RFC1918 remain allowed for local-dev compatibility.
+   * `DSH_TUI_BROWSER_ALLOW_UNSAFE_URL=1` opts out. The policy is shared with
+   * the pure `unsafeUrlKind` classifier so the exact same URL is judged the
+   * same way across the two tools (and is unit-testable without a browser).
+   */
+  private assertSafeUrl(raw: string, op: 'navigate' | 'download'): void {
+    const kind = unsafeUrlKind(raw, this.host.env.allowUnsafeUrl)
+    if (!kind) return
+    const verb = op === 'download' ? 'download' : 'navigation'
+    const reason = kind === 'file'
+      ? `file: URLs are blocked for ${verb} (set DSH_TUI_BROWSER_ALLOW_UNSAFE_URL=1 to allow)`
+      : `cloud-metadata/link-local URL blocked for ${verb} (set DSH_TUI_BROWSER_ALLOW_UNSAFE_URL=1 to allow)`
+    // `download` uses the download error template; `navigate` uses the generic
+    // browser error template (download-specific wording would be misleading).
+    const key = op === 'download' ? 'error.download' : 'error.browser'
+    throw new BrowserToolError('browser-error', t(key, this.host.lang, { message: reason }))
   }
 
   /**
@@ -124,6 +193,11 @@ export class PageOps {
 
   async navigate(params: NavigateParams, signal?: AbortSignal): Promise<NavigateResult> {
     throwIfAborted(signal)
+    // P0-3: the SSRF policy applies to navigation too (a prompt-injected page
+    // must not be able to redirect the model to `file://` or cloud metadata).
+    // Check BEFORE `ensureStarted` so an unsafe URL fails fast with a clear
+    // message and never launches a browser.
+    this.assertSafeUrl(params.url, 'navigate')
     if (!(await this.host.ensureStarted())) throw new BrowserToolError('browser-error', this.host.startError ?? 'browser unavailable')
     try {
       // Use `domcontentloaded` rather than `load`: many real external pages
@@ -359,7 +433,8 @@ export class PageOps {
     }
   }
 
-  async cookies(params: CookiesParams): Promise<CookiesResult> {
+  async cookies(params: CookiesParams, signal?: AbortSignal): Promise<CookiesResult> {
+    throwIfAborted(signal)
     if (!(await this.host.ensureStarted())) throw new BrowserToolError('browser-error', this.host.startError ?? 'browser unavailable')
     try {
       if (params.clear) await this.host.driver.clearCookies()
@@ -526,7 +601,8 @@ export class PageOps {
    * to a temp file; the result always reports the absolute path and byte size so
    * the agent can hand the artifact off (e.g. for further processing).
    */
-  async pdf(params: PdfParams): Promise<PdfResult> {
+  async pdf(params: PdfParams, signal?: AbortSignal): Promise<PdfResult> {
+    throwIfAborted(signal)
     if (!(await this.host.ensureStarted())) throw new BrowserToolError('browser-error', this.host.startError ?? 'browser unavailable')
     try {
       const format = params.format || 'A4'
@@ -536,6 +612,10 @@ export class PageOps {
       if (!outPath) {
         outPath = join(tmpdir(), `browser-use-${Date.now()}.pdf`)
       } else {
+        // Resolve relative user paths against CWD so the reported path/artifact
+        // always uses an absolute path (审核 L5), and contain the write to the
+        // workspace/tmp unless the operator opted in (H1/P0-2).
+        outPath = this.assertWritablePath(outPath)
         const dir = outPath.slice(0, Math.max(outPath.lastIndexOf('/'), outPath.lastIndexOf('\\')) + 1)
         if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true })
       }
@@ -559,30 +639,74 @@ export class PageOps {
    */
   async download(params: DownloadParams, signal?: AbortSignal): Promise<DownloadResult> {
     throwIfAborted(signal)
+    // A minimal SSRF policy before issuing the request (P0-3). Check BEFORE
+    // `ensureStarted` so a blocked URL fails fast and never launches a browser
+    // (matching `navigate`).
+    this.assertSafeUrl(params.url, 'download')
     if (!(await this.host.ensureStarted())) throw new BrowserToolError('browser-error', this.host.startError ?? 'browser unavailable')
     // Request the RAW URL (a signed/token URL must not be scrubbed) — only the
     // displayed URL is sanitized so a secret never leaks into the model context.
     const url = requestUrl(params.url)
     try {
       throwIfAborted(signal)
-      const resp = await this.host.driver.requestGet(url, { timeout: this.host.navTimeoutMs, signal })
-      if (!resp.ok()) {
-        throw new BrowserToolError('browser-error', t('error.download', this.host.lang, { message: `HTTP ${resp.status()}` }))
+      const maxBytes = this.host.env.maxDownloadBytes
+      let body: Buffer
+      let finalUrl = url
+      let contentType = ''
+      // Local `file:` read when the operator explicitly opted out of the SSRF
+      // policy. Playwright's `request.get` does not support `file:`, so a pure
+      // policy-relaxation would still fail with `Protocol "file:" not supported`
+      // (审核 P0-3 / verification §3.1). Read the local file directly instead of
+      // round-tripping through the request context.
+      let parsed: URL | undefined
+      try { parsed = new URL(url) } catch { /* relative/unparseable → downstream */ }
+      if (parsed?.protocol === 'file:' && this.host.env.allowUnsafeUrl) {
+        const p = fileURLToPath(parsed)
+        if (!existsSync(p)) {
+          throw new BrowserToolError('browser-error', t('error.download', this.host.lang, { message: `file not found: ${p}` }))
+        }
+        // Avoid buffering a huge local file just to reject it at the cap below.
+        const st = statSync(p)
+        if (st.size > maxBytes) {
+          throw new BrowserToolError('browser-error', t('error.download', this.host.lang, { message: `response too large (${st.size} bytes > ${maxBytes})` }))
+        }
+        body = readFileSync(p)
+        finalUrl = url
+        contentType = 'application/octet-stream'
+      } else {
+        const resp = await this.host.driver.requestGet(url, { timeout: this.host.navTimeoutMs, signal })
+        if (!resp.ok()) {
+          throw new BrowserToolError('browser-error', t('error.download', this.host.lang, { message: `HTTP ${resp.status()}` }))
+        }
+        // Reject an oversized response before buffering it (P2-2).
+        const cl = resp.headers()['content-length']
+        if (cl && Number(cl) > maxBytes) {
+          throw new BrowserToolError('browser-error', t('error.download', this.host.lang, { message: `response too large (Content-Length ${cl} > ${maxBytes})` }))
+        }
+        body = await resp.body()
+        finalUrl = resp.url() ?? url
+        contentType = resp.headers()['content-type'] ?? ''
       }
-      const buf = await resp.body()
+      if (body.length > maxBytes) {
+        throw new BrowserToolError('browser-error', t('error.download', this.host.lang, { message: `response too large (${body.length} bytes > ${maxBytes})` }))
+      }
       let outPath = params.savePath ?? ''
       if (!outPath) {
         outPath = join(tmpdir(), `browser-use-${Date.now()}.bin`)
       } else {
+        // Resolve relative user paths against CWD so the reported path/artifact
+        // always uses an absolute path (审核 L5), and contain the write to the
+        // workspace/tmp unless the operator opted in (H1/P0-2).
+        outPath = this.assertWritablePath(outPath)
         const dir = outPath.slice(0, Math.max(outPath.lastIndexOf('/'), outPath.lastIndexOf('\\')) + 1)
         if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true })
       }
-      writeFileSync(outPath, buf)
+      writeFileSync(outPath, body)
       return {
-        url: displayUrl(params.url, resp.url() ?? params.url, this.host.env.sensitiveQueryKeys),
+        url: displayUrl(params.url, finalUrl, this.host.env.sensitiveQueryKeys),
         path: outPath,
-        bytes: buf.length,
-        contentType: resp.headers()['content-type'],
+        bytes: body.length,
+        contentType,
       }
     } catch (err) {
       // Preserve a canonical tool error (e.g. B8 `timed-out`) — only wrap
@@ -602,6 +726,9 @@ export class PageOps {
    */
   async saveScreenshots(buffers: Buffer[], savePath: string, format: string): Promise<{ savedPath: string; savedPaths: string[] }> {
     if (!buffers.length) throw new BrowserToolError('browser-error', t('error.browser', this.host.lang, { message: 'no screenshot buffers to save' }))
+    // Resolve relative user paths against CWD so the reported paths are always
+    // absolute (审核 L5), and contain the write to the workspace/tmp (H1/P0-2).
+    savePath = this.assertWritablePath(savePath)
     const outDir = savePath.slice(0, Math.max(savePath.lastIndexOf('/'), savePath.lastIndexOf('\\')) + 1)
     if (outDir && !existsSync(outDir)) mkdirSync(outDir, { recursive: true })
     const saved: string[] = []
@@ -636,7 +763,8 @@ export class PageOps {
    * engines and keeps the plugin's structural typing. Node count is capped so a
    * huge page never bloats the model context.
    */
-  async snapshot(params: SnapshotParams): Promise<SnapshotResult> {
+  async snapshot(params: SnapshotParams, signal?: AbortSignal): Promise<SnapshotResult> {
+    throwIfAborted(signal)
     if (!(await this.host.ensureStarted())) throw new BrowserToolError('browser-error', this.host.startError ?? 'browser unavailable')
     const maxNodes = Math.min(Math.max(Number(params.maxNodes) || 200, 1), 500)
     const wantDelta = params.delta === true
@@ -744,12 +872,12 @@ export class PageOps {
           state.last = nodes;
           return { nodes, total: totalMatching, truncated: totalMatching > nodes.length, ...(DELTA ? { delta } : {}) };
         })()`,
-      )) ?? { nodes: [] }
+      signal)) ?? { nodes: [] }
       const raw = (typeof nodes === 'object' && nodes && 'nodes' in nodes && Array.isArray((nodes as { nodes: SnapshotNode[] }).nodes))
         ? (nodes as { nodes: SnapshotNode[]; total?: number; truncated?: boolean; delta?: SnapshotDelta })
         : { nodes: nodes as SnapshotNode[], total: undefined, truncated: undefined, delta: undefined }
-      const out = raw.nodes.map((n) => (n.href ? { ...n, href: sanitizeUrl(n.href, this.host.env.sensitiveQueryKeys) } : n))
       const sanitizeNodes = (ns: SnapshotNode[]): SnapshotNode[] => ns.map((n) => (n.href ? { ...n, href: sanitizeUrl(n.href, this.host.env.sensitiveQueryKeys) } : n))
+      const out = sanitizeNodes(raw.nodes)
       const sanitizeDelta = (d: SnapshotDelta): SnapshotDelta => {
         const r: SnapshotDelta = {}
         if (d.added) r.added = sanitizeNodes(d.added)

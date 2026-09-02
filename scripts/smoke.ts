@@ -13,10 +13,16 @@
  */
 
 import assert from 'node:assert/strict'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+
+/** Build a query-busted file:// URL so Windows raw-path `import()` never
+ * triggers `ERR_UNSUPPORTED_ESM_URL_SCHEME` (审核 P2-1). */
+function urlSpec(p: string): string {
+  return pathToFileURL(p).href + '?t=' + Date.now()
+}
 
 async function loadAlt(specifiers) {
   for (const specifier of specifiers) {
@@ -28,8 +34,8 @@ async function loadAlt(specifiers) {
 async function main() {
   // 1. Plugin entry.
   const plugin = await loadAlt([
-    join(root, 'lib/types/index.js') + '?t=' + Date.now(),
-    join(root, 'src/index.ts') + '?t=' + Date.now(),
+    urlSpec(join(root, 'lib/types/index.js')),
+    urlSpec(join(root, 'src/index.ts')),
   ])
   assert.ok(plugin, 'plugin module loaded')
   assert.equal(plugin.name, 'dsh-tui-browser-use', 'plugin name')
@@ -38,7 +44,7 @@ async function main() {
 
   // Config schema validation via Schemastery.
   const Schema = (await loadAlt([
-    join(root, 'node_modules/@deepseek-ai/schemastery/lib/index.js'),
+    urlSpec(join(root, 'node_modules/@deepseek-ai/schemastery/lib/index.js')),
   ]))?.default ?? null
   if (plugin.Config?.validate && Schema) {
     const good = plugin.Config.validate({})
@@ -52,8 +58,8 @@ async function main() {
 
   // 2. Provider capability detection.
   const caps = await loadAlt([
-    join(root, 'lib/types/capabilities.js') + '?t=' + Date.now(),
-    join(root, 'src/capabilities.ts') + '?t=' + Date.now(),
+    urlSpec(join(root, 'lib/types/capabilities.js')),
+    urlSpec(join(root, 'src/capabilities.ts')),
   ])
   assert.ok(caps, 'capabilities module loaded')
   assert.equal(typeof caps.detectImageTransfer, 'function', 'detectImageTransfer present')
@@ -73,8 +79,8 @@ async function main() {
 
   // 3. Screenshot preprocessing.
   const pipe = await loadAlt([
-    join(root, 'lib/types/image-pipeline.js') + '?t=' + Date.now(),
-    join(root, 'src/image-pipeline.ts') + '?t=' + Date.now(),
+    urlSpec(join(root, 'lib/types/image-pipeline.js')),
+    urlSpec(join(root, 'src/image-pipeline.ts')),
   ])
   assert.ok(pipe, 'image-pipeline module loaded')
   const prepared = pipe.prepareScreenshot(
@@ -87,8 +93,8 @@ async function main() {
 
   // 4. Tool definitions.
   const tools = await loadAlt([
-    join(root, 'lib/types/tools.js') + '?t=' + Date.now(),
-    join(root, 'src/tools.ts') + '?t=' + Date.now(),
+    urlSpec(join(root, 'lib/types/tools.js')),
+    urlSpec(join(root, 'src/tools.ts')),
   ])
   assert.ok(tools, 'tools module loaded')
   const defs = tools.buildToolDefinitions({} as never)

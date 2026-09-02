@@ -24,7 +24,7 @@ import { resolveProvider, resolveRoute, hasRoutableBaseUrl } from './provider-ro
 import { loadRuntimeEnv, type RuntimeEnv } from './runtime-env.js'
 import { PlaywrightDriver } from './driver/playwright-driver.js'
 import type { BrowserDriver } from './driver/browser-driver.js'
-import { BrowserToolError, sanitizeUrl } from './browser-utils.js'
+import { BrowserToolError, sanitizeUrl, throwIfAborted } from './browser-utils.js'
 import { PageOps, type PageOpsHost } from './page-ops.js'
 import {
   resolveSession,
@@ -334,22 +334,24 @@ export class BrowserSession implements PageOpsHost {
   evaluate(params: EvaluateParams, signal?: AbortSignal): Promise<EvaluateResult> { return this.ops.evaluate(params, signal) }
   captureScreenshot(params: ScreenshotParams): Promise<Buffer> { return this.ops.captureScreenshot(params) }
   captureSegments(opts?: { maxImageBytes?: number }): Promise<CaptureSegmentsResult> { return this.ops.captureSegments(opts) }
-  pdf(params: PdfParams): Promise<PdfResult> { return this.ops.pdf(params) }
+  pdf(params: PdfParams, signal?: AbortSignal): Promise<PdfResult> { return this.ops.pdf(params, signal) }
   download(params: DownloadParams, signal?: AbortSignal): Promise<DownloadResult> { return this.ops.download(params, signal) }
   saveScreenshots(buffers: Buffer[], savePath: string, format: string): Promise<{ savedPath: string; savedPaths: string[] }> { return this.ops.saveScreenshots(buffers, savePath, format) }
-  snapshot(params: SnapshotParams): Promise<SnapshotResult> { return this.ops.snapshot(params) }
-  cookies(params: CookiesParams): Promise<CookiesResult> { return this.ops.cookies(params) }
+  snapshot(params: SnapshotParams, signal?: AbortSignal): Promise<SnapshotResult> { return this.ops.snapshot(params, signal) }
+  cookies(params: CookiesParams, signal?: AbortSignal): Promise<CookiesResult> { return this.ops.cookies(params, signal) }
   /** @deprecated DOM observation is unified under `browser_snapshot`; kept for back-compat. */
   elementSummary(): Promise<string> { return this.ops.elementSummary() }
 
-  async consoleMessages(params: ConsoleMessagesParams): Promise<ConsoleMessagesResult> {
+  async consoleMessages(params: ConsoleMessagesParams, signal?: AbortSignal): Promise<ConsoleMessagesResult> {
+    throwIfAborted(signal)
     if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this._startError ?? t('error.browser-missing', this.lang))
     const out = [...this.consoleLog]
     if (params.clear !== false) this.consoleLog = []
     return { messages: out }
   }
 
-  async networkRequests(params: NetworkRequestsParams): Promise<NetworkRequestsResult> {
+  async networkRequests(params: NetworkRequestsParams, signal?: AbortSignal): Promise<NetworkRequestsResult> {
+    throwIfAborted(signal)
     if (!(await this.ensureStarted())) throw new BrowserToolError('browser-error', this._startError ?? t('error.browser-missing', this.lang))
     const out = [...this.networkLog]
     if (params.clear !== false) this.networkLog = []

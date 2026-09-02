@@ -27,6 +27,9 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const entry = join(root, 'lib/types/index.js') + '?t=' + Date.now()
 const log = (...a) => process.stderr.write('[vision-router] ' + a.join(' ') + '\n')
 
+// P0-3: deliberate local `file://` fixture → opt in to the SSRF relaxation.
+process.env.DSH_TUI_BROWSER_ALLOW_UNSAFE_URL = '1'
+
 function apiKey() {
   if (process.env.OPENAI_API_KEY) return process.env.OPENAI_API_KEY
   const file = process.env.DSH_CREDENTIALS_FILE

@@ -32,6 +32,10 @@ import { join } from 'node:path'
 import type { BrowserUseConfig } from '../src/types.js'
 import { BrowserSession } from '../src/browser.js'
 
+// P0-3: these are deliberate local `file://` fixtures → opt in to the SSRF
+// relaxation before any session reads its runtime env.
+process.env.DSH_TUI_BROWSER_ALLOW_UNSAFE_URL = '1'
+
 /** Match the plugin's balanced defaults (viewport 1024x768, auto, 60px overlap). */
 function config(): BrowserUseConfig {
   return {

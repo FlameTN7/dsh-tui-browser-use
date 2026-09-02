@@ -25,6 +25,8 @@ const log = (...a) => process.stderr.write('[browser-engine] ' + a.join(' ') + '
 const engine = process.env.DSH_TUI_BROWSER_ENGINE ?? 'chromium'
 
 async function main() {
+  // P0-3: deliberate local `file://` fixture → opt in to the SSRF relaxation.
+  process.env.DSH_TUI_BROWSER_ALLOW_UNSAFE_URL = '1'
   const { BrowserSession } = await import(entry)
 
   const dir = mkdtempSync(join(tmpdir(), 'engine-'))

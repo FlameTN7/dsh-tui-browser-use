@@ -41,7 +41,7 @@ import {
 const CONTAINER_LAUNCH_ARGS = ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
 
 /** The default proxy bypass list (localhost/loopback never proxied). */
-const DEFAULT_PROXY_BYPASS = 'localhost,127.0.0.1,::1,10.0.8.1'
+const DEFAULT_PROXY_BYPASS = 'localhost,127.0.0.1,::1'
 
 /** Whether to inject the container/root chromium flags. */
 function chromiumNeedsContainerArgs(noSandbox: boolean): boolean {
@@ -165,6 +165,8 @@ export class PlaywrightDriver implements BrowserDriver {
   private _page: PwPage | null = null
   private _ctx: PwContext | null = null
   private _startError: string | null = null
+  /** In-flight start promise so a concurrent `start()` call reuses the same launch. */
+  private _startPromise: Promise<boolean> | null = null
 
   get startError(): string | null { return this._startError }
   get running(): boolean { return this._engine !== null && this._page !== null }
@@ -177,6 +179,65 @@ export class PlaywrightDriver implements BrowserDriver {
   private requireContext(): PwContext {
     if (!this._ctx) throw new Error('browser context not started')
     return this._ctx
+  }
+
+  /**
+   * Create a fresh page in the existing context and wire its viewport + dialog/
+   * console/network handlers. Used both after a full launch and when a
+   * cooperative abort discarded the old page (P1-2). On failure the page is
+   * reset to null and `_startError` set; the caller decides whether a failed
+   * re-provision into an existing context should also tear the whole browser
+   * down (it does, so a corrupt context does not wedge the session forever).
+   */
+  private async provisionPage(opts: DriverStartOptions): Promise<boolean> {
+    const ctx = this._ctx
+    if (!ctx || !this._engine) {
+      this._startError = 'browser-context-missing'
+      return false
+    }
+    try {
+      const page = await ctx.newPage()
+      this._page = page
+      const dim = effectiveViewport(opts.config)
+      await page.setViewportSize({ width: dim.width, height: dim.height })
+      if (opts.env.dialog !== 'ignore') {
+        page.on('dialog', (d) => {
+          void (opts.env.dialog === 'accept' ? d.accept() : d.dismiss()).catch(() => undefined)
+        })
+      }
+      const handlers = opts.handlers
+      if (handlers) {
+        page.on('console', (m) => handlers.onConsole?.(m))
+        page.on('request', (r) => handlers.onRequest?.(r))
+        page.on('response', (r) => handlers.onResponse?.(r))
+        page.on('requestfailed', (r) => handlers.onRequestFailed?.(r))
+      }
+      this._startError = null
+      return true
+    } catch (err) {
+      // Do not leave a half-created page referenced. The context/engine stay
+      // alive so a reuse attempt can re-provision; the caller may still choose
+      // to `close()` after a false return.
+      this._page = null
+      this._startError = `browser-launch-failed:${err instanceof Error ? err.message : String(err)}`
+      return false
+    }
+  }
+
+  /**
+   * Discard the current page and, in the background, close it so any in-flight
+   * Playwright op on it is cancelled. This is the P1-2 quarantine: after a
+   * cooperative abort the stale op must not keep mutating a page the session
+   * has released, so we mark the page null immediately (the next `start()`
+   * provisions a fresh page in the same context) and close the old one to
+   * cancel the op. `_page` is nulled synchronously so `running` is false before
+   * the next tool is dequeued.
+   */
+  private discardPage(): void {
+    const page = this._page
+    if (!page) return
+    this._page = null
+    void page.close().catch(() => undefined)
   }
 
   private async loadPlaywright(): Promise<PwModule | null> {
@@ -243,15 +304,26 @@ export class PlaywrightDriver implements BrowserDriver {
 
   async start(opts: DriverStartOptions): Promise<boolean> {
     if (this._engine !== null && this._page !== null) return true
-    const pw = await this.loadPlaywright()
-    if (!pw) {
-      this._startError = 'browser-core-missing'
-      return false
-    }
-    try {
+    if (this._startPromise) return this._startPromise
+    const run = (async (): Promise<boolean> => {
+      if (this._engine !== null && this._page !== null) return true
+      // P1-2 full fix: after a cooperative abort the driver discards the page
+      // (to cancel the stale op) but keeps the context/engine so session state
+      // (cookies/storage) survives. Re-provision a fresh page instead of
+      // launching a SECOND browser process.
+      if (this._engine !== null && this._ctx !== null) {
+        const ok = await this.provisionPage(opts)
+        if (!ok) await this.close()
+        return ok
+      }
+      const pw = await this.loadPlaywright()
+      if (!pw) {
+        this._startError = 'browser-core-missing'
+        return false
+      }
+      try {
       const proxy = resolveProxy(opts.config.proxy, opts.env)
       const engine: PwBrowserEngine = opts.env.engine
-      const handlers = opts.handlers
       const storageState = loadStorageState(opts.env.storageStatePath)
       const baseOpts = { headless: true, args: engineLaunchArgs(engine, opts.env.noSandbox), ...(proxy ? { proxy } : {}) }
 
@@ -302,23 +374,9 @@ export class PlaywrightDriver implements BrowserDriver {
           this._ctx = await this._engine.newContext(storageState ? { storageState } : {})
         }
       }
-      const page = await this._ctx.newPage()
-      this._page = page
-      const dim = effectiveViewport(opts.config)
-      await page.setViewportSize({ width: dim.width, height: dim.height })
-      if (opts.env.dialog !== 'ignore') {
-        page.on('dialog', (d) => {
-          void (opts.env.dialog === 'accept' ? d.accept() : d.dismiss()).catch(() => undefined)
-        })
-      }
-      if (handlers) {
-        page.on('console', (m) => handlers.onConsole?.(m))
-        page.on('request', (r) => handlers.onRequest?.(r))
-        page.on('response', (r) => handlers.onResponse?.(r))
-        page.on('requestfailed', (r) => handlers.onRequestFailed?.(r))
-      }
-      this._startError = null
-      return true
+      const ok = await this.provisionPage(opts)
+      if (!ok) await this.close()
+      return ok
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       this._startError = `browser-launch-failed:${msg}`
@@ -328,6 +386,9 @@ export class PlaywrightDriver implements BrowserDriver {
       await this.close()
       return false
     }
+    })()
+    this._startPromise = run
+    try { return await run } finally { this._startPromise = null }
   }
 
   async close(): Promise<void> {
@@ -393,25 +454,25 @@ export class PlaywrightDriver implements BrowserDriver {
   // ── Navigation ─────────────────────────────────────────────────────────
   async goto(url: string, opts?: { timeout?: number; signal?: AbortSignal }): Promise<DriverNavResult> {
     const page = this.requirePage()
-    const resp = await raceAbort(page.goto(url, { waitUntil: 'domcontentloaded', timeout: opts?.timeout }), opts?.signal)
+    const resp = await raceAbort(page.goto(url, { waitUntil: 'domcontentloaded', timeout: opts?.timeout }), opts?.signal, undefined, () => this.discardPage())
     return { status: resp?.status() ?? null, url: resp?.url() ?? url }
   }
 
   async goBack(opts?: { timeout?: number; signal?: AbortSignal }): Promise<DriverNavResult> {
     const page = this.requirePage()
-    const resp = await raceAbort(page.goBack({ waitUntil: 'domcontentloaded', timeout: opts?.timeout }), opts?.signal)
+    const resp = await raceAbort(page.goBack({ waitUntil: 'domcontentloaded', timeout: opts?.timeout }), opts?.signal, undefined, () => this.discardPage())
     return { status: resp?.status() ?? null, url: resp?.url() ?? page.url() }
   }
 
   async goForward(opts?: { timeout?: number; signal?: AbortSignal }): Promise<DriverNavResult> {
     const page = this.requirePage()
-    const resp = await raceAbort(page.goForward({ waitUntil: 'domcontentloaded', timeout: opts?.timeout }), opts?.signal)
+    const resp = await raceAbort(page.goForward({ waitUntil: 'domcontentloaded', timeout: opts?.timeout }), opts?.signal, undefined, () => this.discardPage())
     return { status: resp?.status() ?? null, url: resp?.url() ?? page.url() }
   }
 
   async reload(opts?: { timeout?: number; signal?: AbortSignal }): Promise<DriverNavResult> {
     const page = this.requirePage()
-    const resp = await raceAbort(page.reload({ waitUntil: 'domcontentloaded', timeout: opts?.timeout }), opts?.signal)
+    const resp = await raceAbort(page.reload({ waitUntil: 'domcontentloaded', timeout: opts?.timeout }), opts?.signal, undefined, () => this.discardPage())
     return { status: resp?.status() ?? null, url: resp?.url() ?? page.url() }
   }
 
@@ -460,7 +521,7 @@ export class PlaywrightDriver implements BrowserDriver {
   // ── Observation ────────────────────────────────────────────────────────
   async evaluate<T>(expression: string, signal?: AbortSignal): Promise<T> {
     const page = this.requirePage()
-    return raceAbort(page.evaluate<T>(expression), signal)
+    return raceAbort(page.evaluate<T>(expression), signal, undefined, () => this.discardPage())
   }
 
   async screenshot(opts?: DriverScreenshotOptions): Promise<Buffer> {

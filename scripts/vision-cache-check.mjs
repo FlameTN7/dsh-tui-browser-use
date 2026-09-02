@@ -14,45 +14,32 @@
  *   2. base64 control: the same bytes inlined as a data URL on a second
  *      identical request — observe whether it also hits or stays a miss.
  *
- * The DeepSeek key is read from the running container dsh-tui process environ
- * (never hardcoded / never logged in full), mirroring scripts/vision-check.mjs.
+ * The DeepSeek key is resolved by scripts/key-probe.mjs across every channel a
+ * standalone process can reach (process.env → $DSH_HOME/.credentials.yaml → .env
+ * → a live dsh-tui process environ), mirroring dsh-credentials-local. It is used
+ * in-memory only and never logged in full.
  *
  * Usage: node scripts/vision-cache-check.mjs
  */
 
 import assert from 'node:assert/strict'
-import { readFileSync, readdirSync, writeFileSync, mkdtempSync } from 'node:fs'
+import { writeFileSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { probeApiKey } from './key-probe.mjs'
+
+// P0-3: deliberate local `file://` fixture → opt in to the SSRF relaxation.
+process.env.DSH_TUI_BROWSER_ALLOW_UNSAFE_URL = '1'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const log = (...a) => process.stderr.write('[vision-cache] ' + a.join(' ') + '\n')
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-/** Find the DEEPSEEK_API_KEY from the running dsh-tui process's environ. */
-function dshApiKey() {
-  if (process.env.DEEPSEEK_API_KEY) return process.env.DEEPSEEK_API_KEY
-  for (const pid of readdirSync('/proc')) {
-    if (!/^\d+$/.test(pid)) continue
-    try {
-      const cmd = readFileSync(`/proc/${pid}/cmdline`, 'utf8')
-      if (!cmd.includes('--profile') || !cmd.includes('dsh-tui')) continue
-      const env = readFileSync(`/proc/${pid}/environ`, 'utf8')
-      const hit = env.split('\0').find((s) => s.startsWith('DEEPSEEK_API_KEY='))
-      if (hit) {
-        log(`found key in pid ${pid} (len=${hit.length})`)
-        return hit.slice('DEEPSEEK_API_KEY='.length)
-      }
-    } catch { /* pid vanished */ }
-  }
-  return null
-}
-
 async function main() {
-  const key = dshApiKey()
+  const key = probeApiKey('DEEPSEEK_API_KEY', { log })
   if (!key) {
-    console.error('[vision-cache] ERROR: no DEEPSEEK_API_KEY found in a running dsh-tui process')
+    console.error('[vision-cache] ERROR: no DEEPSEEK_API_KEY reachable from this standalone process (checked process.env, $DSH_HOME/.credentials.yaml, .env, and a live dsh-tui process environ). Export DEEPSEEK_API_KEY in the shell or store it in ~/.dsh/.credentials.yaml to run this test.')
     process.exit(2)
   }
 

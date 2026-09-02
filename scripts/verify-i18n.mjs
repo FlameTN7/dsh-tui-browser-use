@@ -14,12 +14,12 @@
 
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 async function main() {
-  const mod = await import(join(root, 'src/i18n.ts') + '?t=' + Date.now())
+  const mod = await import(pathToFileURL(join(root, 'src/i18n.ts')).href + '?t=' + Date.now())
   const dict = mod.default ?? mod.dict
   if (!dict || typeof dict !== 'object') {
     console.error('[verify-i18n] FAILED: no dictionary exported from src/i18n.ts')

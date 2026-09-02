@@ -11,7 +11,7 @@
 - **21 个工具**：浏览、交互、观察、结构化提取、自然语言多步任务、文件下载等。
 - **超级拼装**: 针对DeepSeek官方识图后端的严格压缩进行适配,长页或宽页自动滚屏分段、分片、截断上传,确保识图的精度。
 - **会话能力**：会话档案与登录态管理（`session.mode` 持久化 / isolated 独立、锁文件防并发、冲突自动降级为独立临时档案、整目录可打包迁移），弹窗策略、串行互斥、导航/动作/收敛三类超时。
-- **安全策略**：视觉提示注入防护（`<task>` 定界，截图视为不可信内容）、URL/敏感 query/cookie 脱敏、无沙箱参数按需门控。
+- **安全策略**：视觉提示注入防护（`<task>` 定界，截图视为不可信内容）、URL/敏感 query/cookie 脱敏；**导航与下载默认拦 `file:` 与云元数据/link-local**（`DSH_TUI_BROWSER_ALLOW_UNSAFE_URL=1` 放开），写盘默认收窄到工作区/临时目录（`DSH_TUI_BROWSER_WRITE_ANY=1` 放开）。**在 root/容器（uid===0）下会自动为 chromium 注入 `--no-sandbox` 等容器参数**（隐式安全降级，可用 `DSH_TUI_BROWSER_NO_SANDBOX=1` 强制，详见环境变量表）。
 - **浏览器引擎支持**：chromium（默认内嵌,可跨平台）/ firefox / webkit，配置可进 dsh-tui `/settings` 面板修改。
 
 ## 架构
@@ -56,6 +56,9 @@
 npm install dsh-tui-browser-use
 npx playwright install chromium --with-deps   # Linux；Windows/macOS 去掉 --with-deps
 ```
+
+> 兼容性：本插件面向 **dsh-tui v0.10.0-beta.4 及以上**组合（当前评审基线），依赖其提供
+> `tools` / `credentials` / `settings` / `tuiSettingsSections` / `skills` 等 harness 服务。
 
 在 dsh-tui profile 的 `cordis.patch.yml` 挂载：
 
@@ -103,6 +106,12 @@ config:
 | `DSH_TUI_BROWSER_PROXY` / `_PROXY_BYPASS` | 外网代理（浏览器启动时读取） | 无 |
 | `DSH_TUI_BROWSER_TIMEOUT_NAVIGATION` / `_ACTION` / `_SETTLE` | 导航 / 动作 / 收敛超时（ms） | 45000 / 12000 / 6000 |
 | `DSH_TUI_BROWSER_USER_DATA_DIR` / `_STORAGE_STATE` | 外部会话目录 / 登录态快照（读取失败回退全新会话） | 内置档案根 |
+| `DSH_TUI_BROWSER_NO_SANDBOX` | 强制注入 `--no-sandbox`；未设时仅在 root/容器（uid===0）下自动注入 chromium 的容器参数 | 自动（仅 root/容器） |
+| `DSH_TUI_BROWSER_WORKSPACE` | 额外允许写入的 workspace 根（与 CWD/临时目录并列） | 无（仅 CWD/临时目录） |
+| `DSH_TUI_BROWSER_WRITE_ANY` | `1` 放开“任意路径写盘”（安全 opt-in，默认拒绝工作区外写入） | `0` |
+| `DSH_TUI_BROWSER_ALLOW_UNSAFE_URL` | `1` 放开 URL 策略（`file:` / 云元数据/link-local），使 `browser_navigate` 也能访问 `file:`（其下载 `file:` 现走本地读取）；默认导航与下载都拦截 | `0` |
+| `DSH_TUI_BROWSER_MAX_DOWNLOAD_BYTES` | 单次 `browser_download` 缓冲上限（超限返回 `response too large`） | 100MB |
+| `DSH_TUI_BROWSER_CNY_USD_RATE` | 成本估算的 USD→CNY 汇率 | 7.2 |
 
 ## 视觉管线（简述）
 

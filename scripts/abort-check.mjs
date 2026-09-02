@@ -17,6 +17,7 @@ import assert from 'node:assert/strict'
 const { analyzeImages } = await import('../src/vision.js')
 const { abortSignalOf } = await import('../src/tools.js')
 const { BrowserSession } = await import('../src/browser.js')
+const { raceAbort } = await import('../src/browser-utils.js')
 
 // 1. abortSignalOf: signal+budget composes (aborts on either); signal alone →
 //    returned; absent → timeout / undefined.
@@ -119,6 +120,49 @@ const { BrowserSession } = await import('../src/browser.js')
   ctl.abort()
   await assert.rejects(s.wait({ selector: '#never' }, ctl.signal), (err) => err?.code === 'timed-out')
   console.log('[5] B8 pre-dispatch abort (#2) — selector wait short-circuits before probe — OK')
+}
+
+// 6. P1-2 (fully fixed): `raceAbort` fires the cancel hook when the abort wins
+//    the race mid-flight, so the driver can quarantine the stale op (close the
+//    page it ran on) instead of leaving it to mutate a page the session released.
+{
+  const ctl = new AbortController()
+  let cancelled = false
+  const hang = new Promise((resolve) => { /* never settles on its own */ })
+  const p = raceAbort(hang, ctl.signal, 'timed-out', () => { cancelled = true })
+  ctl.abort()
+  await assert.rejects(p, (err) => err?.code === 'timed-out')
+  assert.equal(cancelled, true, 'cancel hook fired on abort')
+  console.log('[6] raceAbort fires the cancel hook on abort (P1-2 quarantine) — OK')
+}
+
+// 7. P1-2: `raceAbort` does NOT run the cancel hook when the op already settled
+//    before the abort — a healthy page must not be torn down just because the
+//    abort fired a moment after the op finished.
+{
+  const ctl = new AbortController()
+  let cancelled = false
+  const p = raceAbort(Promise.resolve('done'), ctl.signal, 'timed-out', () => { cancelled = true })
+  const val = await p
+  assert.equal(val, 'done')
+  ctl.abort()
+  assert.equal(cancelled, false, 'cancel hook skipped once the op settled')
+  console.log('[7] raceAbort skips cancel when the op already settled — OK')
+}
+
+// 8. P1-2 robustness: `raceAbort` must NOT hang when the signal is ALREADY
+//    aborted at call time — `addEventListener('abort')` never fires
+//    retroactively, so without an entry guard the promise would never settle
+//    and the stale op would never be quarantined (审核 P1-2).
+{
+  const ctl = new AbortController()
+  ctl.abort()
+  let cancelled = false
+  const hang = new Promise((resolve) => { /* never settles on its own */ })
+  const p = raceAbort(hang, ctl.signal, 'timed-out', () => { cancelled = true })
+  await assert.rejects(p, (err) => err?.code === 'timed-out')
+  assert.equal(cancelled, true, 'cancel hook fired for an already-aborted signal')
+  console.log('[8] raceAbort handles an already-aborted signal — OK')
 }
 
 console.log('\n[abort-check] ALL PASS')

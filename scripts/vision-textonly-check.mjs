@@ -22,6 +22,8 @@ const entry = join(root, 'lib/types/index.js') + '?t=' + Date.now()
 const log = (...a) => process.stderr.write('[vision-textonly] ' + a.join(' ') + '\n')
 
 async function main() {
+  // P0-3: deliberate local `file://` fixture → opt in to the SSRF relaxation.
+  process.env.DSH_TUI_BROWSER_ALLOW_UNSAFE_URL = '1'
   // Route to the official DeepSeek provider but with the TEXT-ONLY model.
   process.env.DSH_TUI_BROWSER_PROVIDER = 'deepseek'
   process.env.DSH_TUI_BROWSER_MODEL = 'deepseek-v4-flash'

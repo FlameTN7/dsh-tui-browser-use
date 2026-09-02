@@ -21,6 +21,9 @@ import { join } from 'node:path'
 import type { BrowserUseConfig, SnapshotNode } from '../src/types.js'
 import { BrowserSession } from '../src/browser.js'
 
+// P0-3: deliberate local `file://` fixtures → opt in to the SSRF relaxation.
+process.env.DSH_TUI_BROWSER_ALLOW_UNSAFE_URL = '1'
+
 function config(): BrowserUseConfig {
   return {
     visionMode: 'off',
