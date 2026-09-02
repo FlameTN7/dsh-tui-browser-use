@@ -8,10 +8,10 @@
 
 ## 功能特色
 
-- **21 个工具**：浏览、交互、观察、结构化提取、自然语言多步任务、文件下载等。
-- **超级拼装**: 针对DeepSeek官方识图后端的严格压缩进行适配,长页或宽页自动滚屏分段、分片、截断上传,确保识图的精度。
-- **会话能力**：会话档案与登录态管理（`session.mode` 持久化 / isolated 独立、锁文件防并发、冲突自动降级为独立临时档案、整目录可打包迁移），弹窗策略、串行互斥、导航/动作/收敛三类超时。
-- **安全策略**：视觉提示注入防护（`<task>` 定界，截图视为不可信内容）、URL/敏感 query/cookie 脱敏；**导航与下载默认拦 `file:` 与云元数据/link-local**（`DSH_TUI_BROWSER_ALLOW_UNSAFE_URL=1` 放开），写盘默认收窄到工作区/临时目录（`DSH_TUI_BROWSER_WRITE_ANY=1` 放开）。**在 root/容器（uid===0）下会自动为 chromium 注入 `--no-sandbox` 等容器参数**（隐式安全降级，可用 `DSH_TUI_BROWSER_NO_SANDBOX=1` 强制，详见环境变量表）。
+- **21 个工具**：提供 21 个 `browser_*` 原子工具，覆盖导航、交互、DOM 快照提取、视觉分析与多步自主任务。
+- **超级拼装**: 针对 DeepSeek 识图后端的压缩限制，自动进行长宽页滚动分段、切片与分辨率保真，避免关键信息因压缩失真。
+- **会话能力**：支持持久化登录态（Profile）与一次性临时会话（Isolated），内置并发锁与防冲突降级机制，支持跨设备打包迁移。
+- **安全策略**：内置视觉 Prompt 注入防护与敏感参数脱敏；默认拦截 `file:` 协议与 SSRF（云元数据），文件写盘严格限制在工作区内。
 - **浏览器引擎支持**：chromium（默认内嵌,可跨平台）/ firefox / webkit，配置可进 dsh-tui `/settings` 面板修改。
 
 ## 架构
@@ -134,19 +134,18 @@ npm run test:integration # 真实浏览器集成（导航/点击/输入/截图/�
 npm run test:storage-state # storageState 损坏回退 + persistent 导入（真实浏览器）
 ```
 
-## 编程接口 / 扩展点
+## 架构扩展点
 
-插件暴露一个小的编程面，供宿主或第三方在不动工具注册表的情况下驱动浏览器或替换后端。
+插件核心逻辑与底层浏览器驱动完全解耦，不向外暴露原生 `page` / `context` 句柄。
 
-- **浏览器后端**：`BrowserSession` 以一个 `BrowserDriver`（默认 `PlaywrightDriver`）构造。该 seam 是**完整后端抽象**：它是唯一的 Playwright 边界，负责启动/关闭、页面收敛（`settleStable`），并把导航/点击/类型/截图/PDF/下载/cookie 等全部页面操作收敛为语义化方法（`goto`/`goBack`/`click`/`fill`/`evaluate`/`screenshot`/`pdf`/`requestGet`…）。`BrowserSession`/page-ops 只经它驱动浏览器，**不暴露裸 `page`/`context` 句柄**——因此可整体替换成非 Playwright 后端。`dsh-tui-browser-use/driver` 同时导出 `BrowserDriver` 契约与 `createPlaywrightDriver()` 默认实现，替换后端只需注入一个实现了该契约的自定义 driver。
-- **视觉传输**：`createVisionAdapter(env, runtimeEnv)` 返回解析到的图像传输模式对应的 adapter（`file` → DeepSeek Files-API；`base64`/`url` → OpenAI 兼容内联）。可在 `dsh-tui-browser-use/vision` 替换。
-- **工具注册**：`buildToolDefinitions(deps)` / `registerTools(ctx, deps)` 注册表接受注入的 session + 视觉 resolver，宿主可包裹或扩展。
+- **替换浏览器后端**：`BrowserSession` 仅依赖 `BrowserDriver` 抽象接口。如需接入非 Playwright 后端（如 Puppeteer 或独立 CDP 连接），只需实现该契约并通过 `dsh-tui-browser-use/driver` 注入自定义实现。
+- **自定义视觉路由**：通过 `dsh-tui-browser-use/vision` 的 `createVisionAdapter`，可自由切换或扩展图像传输策略（默认支持 DeepSeek Files API 与 OpenAI 兼容 base64）。
+- **工具扩展**：通过 `registerTools` 注入自定义会话与视觉解析器，便于宿主包装或拦截工具行为。
 
-子路径导出：`dsh-tui-browser-use/driver`（`BrowserDriver` 契约 + `createPlaywrightDriver()`）、`dsh-tui-browser-use/vision`（`createVisionAdapter`）、`dsh-tui-browser-use/types`。工具数与统一结果信封（`{ ok, value|error, usage? }`）属契约，不可改动。
 
-## 已知限制
+## 说明与反馈
 
-该项目是纯Vibe Coding产物：功能实现与完整回归在无头 Linux 验证，欢迎拷打。
+目前功能实现与全部测试回归均基于无头 Linux（Headless）环境验证。如有边界场景异常或优化建议，欢迎提 Issue / PR 交流。
 
 ## 文档
 
