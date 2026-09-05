@@ -20,6 +20,7 @@ import Schema from '@deepseek-ai/schemastery'
 import { BrowserSession } from './browser.js'
 import { registerTools } from './tools/registry.js'
 import { registerSettingsSection } from './settings-section.js'
+import { filterMinimalPresetTools, resolvePresetId, type PresetSessionLike } from './preset-gate.js'
 import { resolveProvider, resolveRoute, hasRoutableBaseUrl } from './provider-router.js'
 import { detectCapability } from './capabilities.js'
 import { loadRuntimeEnv } from './runtime-env.js'
@@ -295,6 +296,29 @@ export function apply(ctx: Context, config: Config): void {
   // so a live `/settings` change is honoured on the very next tool call.
   const disposer = registerTools(ctx, { session, resolveVisionEnv, visionMode: () => effective.visionMode, lang, runtimeEnv })
 
+  // Minimal-preset gate (P1-4): the tools are registered globally, so a
+  // `minimal` agent would otherwise inherit all 21 `browser_*` tools through
+  // dsh-tools' global+scope merge — the TUI only strips its own
+  // `ask_user_question`. Strip them here at the assembly boundary when the
+  // calling session runs the official `minimal` two-tool preset. The preset is
+  // read fresh per assembly so /preset switches and resumed sessions resolve
+  // correctly (same model-visible rule dsh-tui applies).
+  //
+  // The event name and listener shape live on the host's harness Context, not
+  // the plugin's bare `@deepseek-ai/cordis` `Events` map, so the subscription
+  // is bridged through a structural cast. The listener matches the host's
+  // `system-prompt/assemble` waterfall signature `(assembly, context, next)`.
+  // `ctx.on` is soft-probed: a stub/embedded harness without the event seam
+  // must not block tool registration — the gate is then simply absent.
+  const harnessCtx = ctx as unknown as {
+    on?(event: 'system-prompt/assemble', listener: (assembly: unknown, assembleCtx: unknown, next: () => unknown) => unknown): () => boolean
+  }
+  const assembleGateDisposer = harnessCtx.on?.('system-prompt/assemble', async (assembly, assembleCtx, next) => {
+    const assembled = await next()
+    const agent = (assembleCtx as { agent?: { session?: PresetSessionLike } | undefined }).agent
+    return filterMinimalPresetTools(assembled as { tools: readonly { name: string }[] }, resolvePresetId(agent?.session))
+  })
+
   // Register the dsh-tui settings section (soft-probed; may be absent).
   const debug = (msg: string): void => {
     if (runtimeEnv.debug) process.stderr.write(`[dsh-tui-browser-use] ${msg}\n`)
@@ -396,6 +420,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.effect(() => {
     return async () => {
       disposer?.()
+      assembleGateDisposer?.()
       settingsDisposer?.()
       await session.run(() => session.close())
     }
