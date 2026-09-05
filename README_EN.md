@@ -56,7 +56,7 @@ npm install dsh-tui-browser-use
 npx playwright install chromium --with-deps   # Linux; omit --with-deps on Windows/macOS
 ```
 
-> Compatibility: this plugin targets **dsh-tui v0.10.0-beta.4 and above** (the current review baseline) and depends on its harness services `tools` / `credentials` / `settings` / `tuiSettingsSections` / `skills`.
+> Compatibility: this plugin targets **dsh-tui v0.10.0-beta.5** and depends on its harness services `tools` / `credentials` / `settings` / `tuiSettingsSections` / `skills`.
 
 Mount it in the dsh-tui profile's `cordis.patch.yml`:
 
@@ -126,7 +126,7 @@ Playwright screenshot
 ```sh
 npm run build           # tsc → lib/types/
 npm run check           # CI gate: build + smoke(21 tools) + manifest + i18n + router
-npm run test:logic      # 19 pure-logic regression suites (no browser/key)
+npm run test:logic      # 20 pure-logic regression suites (no browser/key)
 npm run test:container  # stub harness loads the artifact + real browser boot (21 tools)
 npm run test:integration # live browser integration (navigate/click/type/screenshot/tiling/snapshot)
 npm run test:storage-state # storageState corruption fallback + persistent import (live browser)

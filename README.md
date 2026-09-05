@@ -57,8 +57,7 @@ npm install dsh-tui-browser-use
 npx playwright install chromium --with-deps   # Linux；Windows/macOS 去掉 --with-deps
 ```
 
-> 兼容性：本插件面向 **dsh-tui v0.10.0-beta.4 及以上**组合（当前评审基线），依赖其提供
-> `tools` / `credentials` / `settings` / `tuiSettingsSections` / `skills` 等 harness 服务。
+> 兼容性：本插件面向 **dsh-tui v0.10.0-beta.5**版本，依赖其提供`tools` / `credentials` / `settings` / `tuiSettingsSections` / `skills` 等 harness 服务。
 
 在 dsh-tui profile 的 `cordis.patch.yml` 挂载：
 
@@ -128,7 +127,7 @@ Playwright 截图
 ```sh
 npm run build           # tsc → lib/types/
 npm run check           # CI 门禁：build + smoke(21 tools) + manifest + i18n + router
-npm run test:logic      # 19 个纯逻辑回归（无需浏览器/key；含会话档案/启动失败锁释放/快照 delta/驱动契约/密钥探测/运行时环境/provider 路由守卫等）
+npm run test:logic      # 20 个纯逻辑回归（无需浏览器/key；含会话档案/启动失败锁释放/快照 delta/驱动契约/密钥探测/运行时环境/provider 路由守卫/minimal 装配门控等）
 npm run test:container  # stub harness 加载产物 + 真实启动浏览器（21 工具注册）
 npm run test:integration # 真实浏览器集成（导航/点击/输入/截图/切分/快照）
 npm run test:storage-state # storageState 损坏回退 + persistent 导入（真实浏览器）
