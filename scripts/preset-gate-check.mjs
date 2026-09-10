@@ -49,6 +49,36 @@ const { resolvePresetId, filterMinimalPresetTools } = await import('../src/prese
   console.log('[2b] resolvePresetId tolerates lenient session shapes — OK')
 }
 
+// 2c. resolvePresetId — Session V3 (dsh-session alpha.4+, DSH 0.1.5-alpha.2)
+// deletes `Session.events` in favour of `snapshotEvents()`. The gate must read
+// that accessor so a blank-session preset switch still wins over the header.
+{
+  const calls = []
+  const v3 = {
+    header: { agentPreset: 'standard' },
+    snapshotEvents: () => {
+      calls.push('snapshotEvents')
+      return [
+        { type: 'agent-preset/selected', data: { agentPreset: 'code' } },
+        { type: 'agent-preset/selected', data: { agentPreset: 'minimal' } },
+      ]
+    },
+  }
+  assert.equal(resolvePresetId(v3), 'minimal')
+  assert.equal(calls.length, 1, 'snapshotEvents() consulted once')
+  console.log('[2c] resolvePresetId reads Session V3 snapshotEvents() — OK')
+}
+
+// 2d. resolvePresetId — a surviving snapshotEvents() that returns a broken
+// (non-array) value or throws must fall back to header, never throw.
+{
+  assert.equal(resolvePresetId({ header: { agentPreset: 'minimal' }, snapshotEvents: () => undefined }), 'minimal')
+  assert.equal(resolvePresetId({ header: {}, snapshotEvents: () => 'not-array' }), undefined)
+  const throwing = { header: { agentPreset: 'code' }, snapshotEvents: () => { throw new Error('boom') } }
+  assert.equal(resolvePresetId(throwing), 'code')
+  console.log('[2d] broken snapshotEvents() falls back to header — OK')
+}
+
 // 3. filterMinimalPresetTools — minimal strips browser tools, keeps others.
 {
   const assembly = {

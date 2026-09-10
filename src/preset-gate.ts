@@ -36,10 +36,21 @@ const BROWSER_TOOL_PREFIX = 'browser_'
  * paths hand us different session surfaces (e.g. a live-preview session may
  * carry a header without an event log). Missing surfaces must resolve to
  * "no preset recorded" — never throw (a gate must not break the host turn).
+ *
+ * The event log has two shapes across dsh-session majors: the older
+ * `Session.events` array, and Session V3 (dsh-session alpha.4+ / DSH
+ * 0.1.5-alpha.2) which deletes `events` in favour of a `snapshotEvents()`
+ * accessor. Both are accepted so a blank-session `agent-preset/selected`
+ * switch is honoured under either model.
  */
 export interface PresetSessionLike {
   readonly header?: { readonly agentPreset?: string }
   readonly events?: readonly { readonly type: string; readonly data?: unknown }[]
+  /**
+   * Session V3 event-log accessor (alpha.4+). Returns an array snapshot, or a
+   * non-array when the contract is broken; treated as "no event log" below.
+   */
+  readonly snapshotEvents?: () => readonly { readonly type: string; readonly data?: unknown }[]
 }
 
 /** The assembly slice the gate rewrites (minimal: tools only). */
@@ -49,6 +60,27 @@ export interface ToolAssemblyLike {
 
 /** The event type dsh-agent-presets records when a blank session switches preset. */
 const PRESET_SELECTED_EVENT = 'agent-preset/selected'
+
+/**
+ * The session event log, from whichever shape the live session exposes.
+ *
+ * Session V3 (alpha.4+) reads `snapshotEvents()` and has no `events` array;
+ * older sessions carry `events` directly. A present accessor always wins, but
+ * anything other than an array (a broken contract) is treated as absent so the
+ * gate falls back to the header instead of throwing on the host turn.
+ */
+function sessionEventLog(session: PresetSessionLike): readonly { readonly type: string; readonly data?: unknown }[] {
+  if (typeof session.snapshotEvents === 'function') {
+    let snapshot: unknown
+    try {
+      snapshot = session.snapshotEvents()
+    } catch {
+      snapshot = undefined
+    }
+    if (Array.isArray(snapshot)) return snapshot
+  }
+  return session.events ?? []
+}
 
 /**
  * Resolve the preset a live session actually runs under: the newest
@@ -61,7 +93,7 @@ const PRESET_SELECTED_EVENT = 'agent-preset/selected'
  */
 export function resolvePresetId(session: PresetSessionLike | undefined): string | undefined {
   if (session === undefined) return undefined
-  const events = session.events ?? []
+  const events = sessionEventLog(session)
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index]
     if (event?.type !== PRESET_SELECTED_EVENT) continue
