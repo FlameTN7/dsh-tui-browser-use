@@ -56,7 +56,7 @@ npm install dsh-tui-browser-use
 npx playwright install chromium --with-deps   # Linux; omit --with-deps on Windows/macOS
 ```
 
-> Compatibility: this plugin targets **dsh-tui v0.10.0-beta.5** and depends on its harness services `tools` / `credentials` / `settings` / `tuiSettingsSections` / `skills`.
+> Compatibility: this plugin targets **dsh-tui v0.10.0** and depends on its harness services `tools` / `credentials` / `settings` / `tuiSettingsSections` / `skills`.
 
 Mount it in the dsh-tui profile's `cordis.patch.yml`:
 

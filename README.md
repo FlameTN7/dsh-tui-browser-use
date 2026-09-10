@@ -57,7 +57,7 @@ npm install dsh-tui-browser-use
 npx playwright install chromium --with-deps   # Linux；Windows/macOS 去掉 --with-deps
 ```
 
-> 兼容性：本插件面向 **dsh-tui v0.10.0-beta.5**版本，依赖其提供`tools` / `credentials` / `settings` / `tuiSettingsSections` / `skills` 等 harness 服务。
+> 兼容性：本插件面向 **dsh-tui v0.10.0**版本，依赖其提供`tools` / `credentials` / `settings` / `tuiSettingsSections` / `skills` 等 harness 服务。
 
 在 dsh-tui profile 的 `cordis.patch.yml` 挂载：
 
