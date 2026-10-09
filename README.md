@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | [English](README_EN.md)
 
-> 给 dsh-tui 的 agent 装上“看得见网页”的浏览器自动化工具。**目前 DSH 官方已推出浏览器自动化，本仓库作为试手成果进入归档状态**。
+> 给 dsh-tui 的 agent 装上“看得见网页”的浏览器自动化工具。
 
 **dsh-tui-browser-use** 是 [dsh-tui](https://github.com/ccch1mneyyy/dsh-TUI) 的子插件（Cordis 插件），随 `dsh --profile dsh-tui` 组合加载。它向 agent 注册 **21 个 `browser_*` 工具**，用 [Playwright](https://playwright.dev/) 驱动真实浏览器，并原生适配 DeepSeek 视觉模型理解截图，返回经 schema 校验的结构化结果。
 
