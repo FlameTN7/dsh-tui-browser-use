@@ -51,6 +51,8 @@ export interface ToolDefinition {
   output: {
     schema: Record<string, unknown>
     render(args: unknown, value: unknown): Array<Record<string, unknown>>
+    /** Pure replayable presentation projection for native and nested calls (DSH 0.2.1+). */
+    presentationMeta?(args: unknown, value: unknown): unknown
   }
   execute(args: unknown, exec: unknown): Promise<unknown>
   /** Optional cooperative timeout budget in ms (enforced by `dsh-tool-call-timeout-policy`). */

@@ -80,7 +80,10 @@ async function main() {
     console.log(`[verify-manifest] OK: ${parsed.id}@${parsed.version} (manifest v${parsed.manifestVersion})`)
 
     if (dshTui) {
-      const specDir = join(dshTuiDir, 'dsh-ecosystem-spec')
+      // Support latest dsh-TUI (tui-profile) and legacy (dsh-ecosystem-spec)
+      const specDir = existsSync(join(dshTuiDir, 'tui-profile'))
+        ? join(dshTuiDir, 'tui-profile')
+        : join(dshTuiDir, 'dsh-ecosystem-spec')
       const data = dshTui.loadSpecData(specDir)
       if (!data) {
         console.error('[verify-manifest] FAILED: ecosystem spec data unreadable')
