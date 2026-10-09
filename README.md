@@ -2,17 +2,17 @@
 
 [简体中文](README.md) | [English](README_EN.md)
 
-> 给 dsh-tui 的 agent 装上"看得见网页"的浏览器自动化工具。**目前DSH官方已推出浏览器自动化，本仓库作为试手成果进入归档状态**。
+> 给 dsh-tui 的 agent 装上“看得见网页”的浏览器自动化工具。**目前 DSH 官方已推出浏览器自动化，本仓库作为试手成果进入归档状态**。
 
-**dsh-tui-browser-use** 是 [dsh-tui](https://github.com/ccch1mneyyy/dsh-TUI) 的子插件（Cordis 插件），随 `dsh --profile dsh-tui` 组合加载。它向 agent 注册 **21 个 `browser_*` 工具**，用 [Playwright](https://playwright.dev/) 驱动真实浏览器，并原生适配DeepSeek视觉模型理解截图，返回经 schema 校验的结构化结果。
+**dsh-tui-browser-use** 是 [dsh-tui](https://github.com/ccch1mneyyy/dsh-TUI) 的子插件（Cordis 插件），随 `dsh --profile dsh-tui` 组合加载。它向 agent 注册 **21 个 `browser_*` 工具**，用 [Playwright](https://playwright.dev/) 驱动真实浏览器，并原生适配 DeepSeek 视觉模型理解截图，返回经 schema 校验的结构化结果。
 
 ## 功能特色
 
 - **21 个工具**：提供 21 个 `browser_*` 原子工具，覆盖导航、交互、DOM 快照提取、视觉分析与多步自主任务。
-- **超级拼装**: 针对 DeepSeek 识图后端的压缩限制，自动进行长宽页滚动分段、切片与分辨率保真，避免关键信息因压缩失真。
+- **超级拼装**：针对 DeepSeek 识图后端的压缩限制，自动进行长宽页滚动分段、切片与分辨率保真，避免关键信息因压缩失真。
 - **会话能力**：支持持久化登录态（Profile）与一次性临时会话（Isolated），内置并发锁与防冲突降级机制，支持跨设备打包迁移。
 - **安全策略**：内置视觉 Prompt 注入防护与敏感参数脱敏；默认拦截 `file:` 协议与 SSRF（云元数据），文件写盘严格限制在工作区内。
-- **浏览器引擎支持**：chromium（默认内嵌,可跨平台）/ firefox / webkit，配置可进 dsh-tui `/settings` 面板修改。
+- **浏览器引擎支持**：chromium（默认内嵌，可跨平台）/ firefox / webkit，配置可进 dsh-tui `/settings` 面板修改。
 
 ## 架构
 
@@ -57,7 +57,7 @@ npm install dsh-tui-browser-use
 npx playwright install chromium --with-deps   # Linux；Windows/macOS 去掉 --with-deps
 ```
 
-> 兼容性：本插件已适配最新 **dsh-tui (≥ v0.14.0)** 及 **deepseek-harness (≥ 0.2.1-alpha.2)**，向下兼容 v0.10.0+，依赖其提供 `tools` / `credentials` / `settings` / `tuiSettingsSections` / `skills` 等 harness 服务与 `tui-profile` 私有协议。
+> 兼容性：本插件已适配最新 **dsh-tui (≥ v0.14.0)** 与 **deepseek-harness (≥ 0.2.0-rc.2)**，向下兼容早期版本（v0.10.0+），依赖其提供 `tools` / `credentials` / `settings` / `tuiSettingsSections` / `skills` 等 harness 服务与 `tui-profile` 私有协议。
 
 在 dsh-tui profile 的 `cordis.patch.yml` 挂载：
 
@@ -87,10 +87,9 @@ config:
 - 档案根为跨平台缓存目录：Linux `$XDG_CACHE_HOME`（默认 `~/.cache`）→ macOS `~/Library/Caches` → Windows `%LOCALAPPDATA%`，下挂 `dsh-tui-browser-use`。
 - 整目录可打包迁移：把 `profiles/<name>/` 复制到另一台机器/路径，将 `session.profile` 指向它，登录态即随档案迁移。
 
-
 ### 设置面板
 
-本插件于dsh-tui注册命名空间,可于dsh-tui的/settings看见常用设置,部分设置需要会话重启后生效
+本插件于 dsh-tui 注册 `browser-use` 命名空间，可于 dsh-tui 的 `/settings` 页面查看与修改常用设置，部分设置需要会话重启后生效。
 
 ### 环境变量覆盖（可选）
 
@@ -140,7 +139,6 @@ npm run test:storage-state # storageState 损坏回退 + persistent 导入（真
 - **替换浏览器后端**：`BrowserSession` 仅依赖 `BrowserDriver` 抽象接口。如需接入非 Playwright 后端（如 Puppeteer 或独立 CDP 连接），只需实现该契约并通过 `dsh-tui-browser-use/driver` 注入自定义实现。
 - **自定义视觉路由**：通过 `dsh-tui-browser-use/vision` 的 `createVisionAdapter`，可自由切换或扩展图像传输策略（默认支持 DeepSeek Files API 与 OpenAI 兼容 base64）。
 - **工具扩展**：通过 `registerTools` 注入自定义会话与视觉解析器，便于宿主包装或拦截工具行为。
-
 
 ## 说明与反馈
 
