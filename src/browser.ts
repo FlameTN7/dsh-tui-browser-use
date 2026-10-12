@@ -117,6 +117,8 @@ export class BrowserSession implements PageOpsHost {
   private sessionLocked = false
   /** Whether a persistent lock conflict degraded this run to an isolated session. */
   private degraded = false
+  /** Profile ownership outlives a page discarded by a cooperative abort. */
+  private sessionInitialized = false
 
   // ── Console / network capture (P1 #7) ───────────────────────────────────
   // Ring buffers of recent console messages and network requests so the agent
@@ -192,37 +194,30 @@ export class BrowserSession implements PageOpsHost {
    */
   async ensureStarted(): Promise<boolean> {
     if (this.driver.running) return true
-    // Re-resolve the session paths on each fresh start so a live `/settings`
+    // Re-resolve the session paths on each fresh session so a live `/settings`
     // edit to `session.mode`/`session.profile` is honoured the next time the
     // browser is actually started (matching the proxy restart semantics).
-    this.sessionPaths = resolveSession(this.config, this.env)
-    // Reset the per-attempt flags before re-evaluating the lock below; a stale
-    // `true` from a previous attempt must never leak into this one.
-    this.sessionLocked = false
-    this.degraded = false
-    // Whether THIS attempt acquired the persistent lock (not inherited from an
-    // earlier attempt). Only a lock this attempt acquired may be released on a
-    // failed start — a lock-conflict fallback owns no lock.
-    let lockAcquiredHere = false
-    // Persistent mode: acquire the profile lock so two processes cannot share a
-    // profile (B5). On conflict we DEGRADE to an isolated session rather than
-    // hanging — reported via `status().session.degraded`. The paths are reset to
-    // a brand-new ephemeral run dir so the browser never touches the locked
-    // profile dir.
-    if (this.sessionPaths.mode === 'persistent' && this.sessionPaths.lockPath) {
-      const lock = acquireLock(this.sessionPaths.lockPath)
-      if (lock.held) {
-        this.sessionLocked = true
-        lockAcquiredHere = true
-      } else {
-        this.degraded = true
-        this.sessionPaths = degradeToIsolated(this.sessionPaths)
+    // A discarded page does not end the context's profile lifetime. Reuse the
+    // same paths and lock until close or a failed recovery releases them.
+    if (!this.sessionInitialized) {
+      this.sessionPaths = resolveSession(this.config, this.env)
+      this.sessionLocked = false
+      this.degraded = false
+      // Persistent mode: acquire the profile lock so two processes cannot share
+      // a profile. A conflict degrades to a fresh isolated directory.
+      if (this.sessionPaths.mode === 'persistent' && this.sessionPaths.lockPath) {
+        const lock = acquireLock(this.sessionPaths.lockPath)
+        if (lock.held) {
+          this.sessionLocked = true
+        } else {
+          this.degraded = true
+          this.sessionPaths = degradeToIsolated(this.sessionPaths)
+        }
       }
-    }
-    // Lazy-create the user-data dir (B6): profiles are only materialised on the
-    // FIRST tool call that actually starts the browser, never at construction.
-    if (this.sessionPaths.userDataDir) {
-      try { mkdirSync(this.sessionPaths.userDataDir, { recursive: true }) } catch { /* best-effort */ }
+      // Profiles are materialised on the first tool call, not construction.
+      if (this.sessionPaths.userDataDir) {
+        try { mkdirSync(this.sessionPaths.userDataDir, { recursive: true }) } catch { /* best-effort */ }
+      }
     }
     // Forward the RESOLVED paths (not the raw env) so a managed persistent /
     // isolated profile is what the browser actually launches with. The spread
@@ -266,12 +261,14 @@ export class BrowserSession implements PageOpsHost {
     }
     if (!started) {
       this._startError = this._startError ?? this.driver.startError ?? t('error.browser-missing', this.lang)
-      // Release only a lock THIS attempt acquired (P1-1): a failed start must
+      // Release only a lock owned by this session: a failed start must
       // not poison later attempts — otherwise the next ensureStarted() sees its
       // own live PID in the lock and degrades to isolated forever. On a real
       // lock conflict we acquired nothing, and `degraded` must stay true so the
       // failure report still explains the fallback correctly.
-      if (lockAcquiredHere && this.sessionPaths.lockPath) {
+      await this.driver.close().catch(() => undefined)
+      this.sessionInitialized = false
+      if (this.sessionLocked && this.sessionPaths.lockPath) {
         releaseLock(this.sessionPaths.lockPath)
         this.sessionLocked = false
       }
@@ -280,6 +277,7 @@ export class BrowserSession implements PageOpsHost {
       if (this.sessionPaths.ephemeralRunDir) purgeEphemeral(this.sessionPaths.ephemeralRunDir)
       return false
     }
+    this.sessionInitialized = true
     this._startError = null
     return true
   }
@@ -306,6 +304,7 @@ export class BrowserSession implements PageOpsHost {
       }
     }
     await this.driver.close()
+    this.sessionInitialized = false
     // Release a held persistent lock so the next start can re-acquire it.
     if (this.sessionLocked && this.sessionPaths.lockPath) {
       releaseLock(this.sessionPaths.lockPath)

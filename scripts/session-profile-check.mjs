@@ -100,7 +100,7 @@ const root = mkdtempSync(join(tmpdir(), 'dsh-session-check-'))
     root,
   )
   assert.equal(r.profileName, 'default')
-  assert.ok(r.userDataDir && r.userDataDir.endsWith('profiles/default/user-data'), 'invalid name → default dir')
+  assert.equal(r.userDataDir, join(root, 'profiles', 'default', 'user-data'), 'invalid name → default dir')
   console.log('[6] invalid profile name degrades — OK')
 }
 
@@ -129,7 +129,7 @@ const root = mkdtempSync(join(tmpdir(), 'dsh-session-check-'))
   sp.writeStorageState(statePath, payload)
   assert.ok(existsSync(statePath), 'state file written')
   const mode = statSync(statePath).mode & 0o777
-  assert.equal(mode, 0o600, 'state file is 0600')
+  if (process.platform !== 'win32') assert.equal(mode, 0o600, 'state file is 0600')
   const { readFileSync } = await import('node:fs')
   const parsed = JSON.parse(readFileSync(statePath, 'utf8'))
   assert.deepEqual(parsed, payload, 'payload round-trips')
