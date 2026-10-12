@@ -16,10 +16,16 @@
  * Run: `node --import tsx/esm scripts/session-start-failure-check.mjs`
  */
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 
-const rootBase = `/tmp/dsh-session-start-failure-${Date.now()}`
+const rootBase = mkdtempSync(join(tmpdir(), 'dsh-session-start-failure-'))
+const originalEnv = Object.fromEntries(['HOME', 'LOCALAPPDATA', 'XDG_CACHE_HOME'].map(k => [k, process.env[k]]))
+function useProfileRoot(root) {
+  for (const key of Object.keys(originalEnv)) process.env[key] = root
+  return process.platform === 'darwin' ? join(root, 'Library', 'Caches') : root
+}
 const persistentConfig = () => ({
   visionMode: 'off',
   screenshot: { format: 'jpeg', quality: 80, maxDimension: '1024x768' },
@@ -78,8 +84,7 @@ function makeStubDriver(mode) {
 }
 
 async function scenarioA({ BrowserSession, loadRuntimeEnv }) {
-  const root = join(rootBase, 'a')
-  process.env.XDG_CACHE_HOME = root
+  const root = useProfileRoot(join(rootBase, 'a'))
   const env = loadRuntimeEnv()
   const session = new BrowserSession(persistentConfig(), 'zh', env, makeStubDriver('false'))
   const lockPath = join(root, 'dsh-tui-browser-use', 'profiles', 'default', 'lock')
@@ -100,8 +105,7 @@ async function scenarioA({ BrowserSession, loadRuntimeEnv }) {
 }
 
 async function scenarioB({ BrowserSession, loadRuntimeEnv }) {
-  const root = join(rootBase, 'b')
-  process.env.XDG_CACHE_HOME = root
+  const root = useProfileRoot(join(rootBase, 'b'))
   const env = loadRuntimeEnv()
   const session = new BrowserSession(persistentConfig(), 'zh', env, makeStubDriver('throw'))
   const lockPath = join(root, 'dsh-tui-browser-use', 'profiles', 'default', 'lock')
@@ -123,8 +127,7 @@ async function scenarioB({ BrowserSession, loadRuntimeEnv }) {
 }
 
 async function scenarioC({ BrowserSession, loadRuntimeEnv }) {
-  const root = join(rootBase, 'c')
-  process.env.XDG_CACHE_HOME = root
+  const root = useProfileRoot(join(rootBase, 'c'))
   const lockDir = join(root, 'dsh-tui-browser-use', 'profiles', 'default')
   const lockPath = join(lockDir, 'lock')
   mkdirSync(lockDir, { recursive: true })
@@ -146,9 +149,17 @@ async function scenarioC({ BrowserSession, loadRuntimeEnv }) {
   console.log('[C] real lock conflict keeps degraded=true through failed starts — OK')
 }
 
-const { BrowserSession, loadRuntimeEnv } = await load()
-await scenarioA({ BrowserSession, loadRuntimeEnv })
-await scenarioB({ BrowserSession, loadRuntimeEnv })
-await scenarioC({ BrowserSession, loadRuntimeEnv })
+try {
+  const { BrowserSession, loadRuntimeEnv } = await load()
+  await scenarioA({ BrowserSession, loadRuntimeEnv })
+  await scenarioB({ BrowserSession, loadRuntimeEnv })
+  await scenarioC({ BrowserSession, loadRuntimeEnv })
+} finally {
+  for (const [key, value] of Object.entries(originalEnv)) {
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
+  rmSync(rootBase, { recursive: true, force: true })
+}
 console.log('\n[session-start-failure-check] ALL PASS')
 process.exit(0)

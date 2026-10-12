@@ -30,6 +30,7 @@ import { validateJsonSchema, parseJsonReply, type SchemaNode } from './schema-va
 import { effectiveViewport, detectCapability } from './capabilities.js'
 import { resolveProvider, resolveRoute, hasRoutableBaseUrl } from './provider-router.js'
 import type { RuntimeEnv } from './runtime-env.js'
+import { sanitizeUrl } from './browser-utils.js'
 
 /** The runtime dependencies a tool needs when it executes. */
 export interface ToolDeps {
@@ -101,8 +102,13 @@ export function accumulateUsage(acc: Usage | undefined, u: Usage): Usage {
 const ANSI_RE = /\x1b\[[0-9;?]*[a-zA-Z]/g
 const MAX_MSG = 2000
 
-function sanitizeMessage(msg: string): string {
-  return msg.replace(ANSI_RE, '').slice(0, MAX_MSG)
+function sanitizeMessage(msg: string, sensitiveKeys?: string[]): string {
+  // Playwright errors include the requested URL, often twice (message + call
+  // log). Redact before truncating so errors obey the same policy as results.
+  return msg.replace(ANSI_RE, '')
+    .replace(/(?:[a-z][a-z\d+.-]*:\/\/|\/{1,2}|\?)[^\s"'<>]+/gi,
+      (url) => sanitizeUrl(url, sensitiveKeys))
+    .slice(0, MAX_MSG)
 }
 
 /**
@@ -129,17 +135,17 @@ export function abortSignalOf(exec: unknown, fallbackMs?: number, budgetMs?: num
 }
 
 /** Convert an error into a failure envelope. */
-function fail(err: unknown): ResultEnvelope<never> {
+function failureEnvelope(err: unknown, sensitiveKeys?: string[]): ResultEnvelope<never> {
   if (err && typeof err === 'object' && 'code' in err && 'message' in err) {
     const code = (err as { code: ErrorCode }).code
-    const message = sanitizeMessage((err as { message: string }).message)
+    const message = sanitizeMessage((err as { message: string }).message, sensitiveKeys)
     return { ok: false, error: { code, message } }
   }
   const msg = err instanceof Error ? err.message : String(err)
   // Defense-in-depth: recognize the canonical vision-unavailable message even
   // if the thrower forgot to attach `code` (P1-08 / §6 error-code contract).
   const code: ErrorCode = msg === 'vision-unavailable' ? 'vision-unavailable' : 'browser-error'
-  return { ok: false, error: { code, message: sanitizeMessage(msg) } }
+  return { ok: false, error: { code, message: sanitizeMessage(msg, sensitiveKeys) } }
 }
 
 // Cooperative abort budget: a tool's cooperative timeout must resolve its own
@@ -394,6 +400,7 @@ export async function extractWithRetry(
 export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
   const session = deps.session
   const lang = deps.lang
+  const fail = (err: unknown) => failureEnvelope(err, deps.runtimeEnv?.sensitiveQueryKeys)
 
   return [
     {
