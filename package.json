@@ -52,7 +52,6 @@
     "compile": "npm run clean && tsc -p tsconfig.json",
     "build": "npm run compile",
     "prepack": "npm run build",
-    "prepare": "npm run build",
     "check": "npm run build && npm run smoke && npm run verify:manifest && npm run verify:i18n && npm run router:check",
     "postinstall": "node scripts/postinstall.mjs",
     "smoke": "node --import tsx/esm scripts/smoke.ts",
